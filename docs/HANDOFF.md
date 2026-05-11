@@ -26,23 +26,23 @@
 
 | # | Task                                     | Status      | Commit / Notes |
 |---|------------------------------------------|-------------|----------------|
-| 0 | Scaffolding + git init                   | pending     | |
-| 1 | Config module                            | pending     | |
-| 2 | Test fixtures (conftest.py)              | pending     | |
-| 3 | State module (SQLite)                    | pending     | |
-| 4 | Data module (Twelve Data + cache)        | pending     | |
-| 5 | Classic indicators                       | pending     | |
-| 6 | ICT indicators                           | pending     | |
-| 7 | SMC indicators                           | pending     | |
-| 8 | Wyckoff (soft bias)                      | pending     | |
-| 9 | SR levels helpers                        | pending     | |
-| 10| Signal engine (5-layer)                  | pending     | |
-| 11| Filters (dedup/ratelimit)                | pending     | |
-| 12| Formatter                                | pending     | |
-| 13| Bot entrypoint                           | pending     | |
-| 14| Backtest                                 | pending     | |
-| 15| README                                   | pending     | |
-| 16| Acceptance smoke                         | pending     | |
+| 0 | Scaffolding + git init                   | done        | 257c6e4 |
+| 1 | Config module                            | done        | |
+| 2 | Test fixtures (conftest.py)              | done        | |
+| 3 | State module (SQLite)                    | done        | |
+| 4 | Data module (Twelve Data + cache)        | done        | |
+| 5 | Classic indicators                       | done        | |
+| 6 | ICT indicators                           | done        | |
+| 7 | SMC indicators                           | done        | |
+| 8 | Wyckoff (soft bias)                      | done        | |
+| 9 | SR levels helpers                        | done        | |
+| 10| Signal engine (5-layer)                  | done        | np.isnan→pd.isna fix |
+| 11| Filters (dedup/ratelimit)                | done        | |
+| 12| Formatter                                | done        | |
+| 13| Bot entrypoint                           | done        | |
+| 14| Backtest                                 | done        | |
+| 15| README                                   | done        | |
+| 16| Acceptance smoke                         | done        | 64/64 tests pass |
 | 17| Pip constant + state migration           | pending     | R3 |
 | 18| SR zones module                          | pending     | R3 |
 | 19| SR zones into intraday engine            | pending     | R3 |
@@ -55,6 +55,8 @@
 ## Recent events
 
 (append latest at the top)
+- **Tasks 0–16 complete.** Intraday baseline green: 64/64 tests pass. Module smoke OK. Ready for multi-stream phase (Tasks 17–24).
+- T10 fix: `np.isnan(value)` raised TypeError when pandas_ta_classic returns `None` for short series. Replaced with `pd.isna()` in `engine.py` + `classic_signals.py`.
 - Task 0 in progress: scaffolded files, venv created, deps installed via `pandas-ta-classic` (see deviation).
 
 ## Deviations from plan
