@@ -43,18 +43,19 @@
 | 14| Backtest                                 | done        | |
 | 15| README                                   | done        | |
 | 16| Acceptance smoke                         | done        | 64/64 tests pass |
-| 17| Pip constant + state migration           | pending     | R3 |
-| 18| SR zones module                          | pending     | R3 |
-| 19| SR zones into intraday engine            | pending     | R3 |
-| 20| Swing stream                             | pending     | R3 |
-| 21| Scalp stream                             | pending     | R3 |
-| 22| StreamRouter + per-stream filters        | pending     | R3 |
-| 23| Wire router + formatter labels           | pending     | R3 |
-| 24| Per-stream backtest                      | pending     | R3 |
+| 17| Pip constant + state migration           | done        | R3 |
+| 18| SR zones module                          | done        | R3 |
+| 19| SR zones into intraday engine            | done        | R3 |
+| 20| Swing stream                             | done        | R3 |
+| 21| Scalp stream                             | done        | R3 |
+| 22| StreamRouter + per-stream filters        | done        | 212d7e6 |
+| 23| Wire router + formatter labels           | done        | Codex takeover |
+| 24| Per-stream backtest                      | done        | Codex takeover |
 
 ## Recent events
 
 (append latest at the top)
+- **Codex takeover completed Tasks 23–24.** Finished router wiring in `bot.py`, persisted stream labels, added per-stream backtest support, and verified `python -c "from xau_pro_bot import bot; print('ok')"` plus `pytest -v` (88/88 passed).
 - **Tasks 0–16 complete.** Intraday baseline green: 64/64 tests pass. Module smoke OK. Ready for multi-stream phase (Tasks 17–24).
 - T10 fix: `np.isnan(value)` raised TypeError when pandas_ta_classic returns `None` for short series. Replaced with `pd.isna()` in `engine.py` + `classic_signals.py`.
 - Task 0 in progress: scaffolded files, venv created, deps installed via `pandas-ta-classic` (see deviation).

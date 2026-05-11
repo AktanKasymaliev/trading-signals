@@ -21,7 +21,7 @@ from telegram.ext import (
 from xau_pro_bot import config, data, formatter
 from xau_pro_bot.indicators import classic
 from xau_pro_bot.indicators.ict import get_killzone
-from xau_pro_bot.signals.engine import MasterSignalEngine
+from xau_pro_bot.signals.router import StreamRouter
 from xau_pro_bot.signals.filters import should_send
 from xau_pro_bot.state import State
 
@@ -52,7 +52,7 @@ _signal_log.setLevel(logging.INFO)
 
 ENV: dict[str, str] = {}
 STATE: State | None = None
-ENGINE = MasterSignalEngine()
+ROUTER = StreamRouter()
 
 
 def _log_signal(sig: dict[str, Any], status: str) -> None:
@@ -80,6 +80,7 @@ def _persist(sig: dict[str, Any]) -> None:
         "rr": sig.get("rr"),
         "killzone": sig.get("killzone"),
         "reasons_json": json.dumps(sig["reasons"], ensure_ascii=False),
+        "stream": sig.get("stream", "intraday"),
     })
 
 
@@ -100,25 +101,24 @@ async def _scan_and_send(app: Application, *, bypass_dedup: bool = False) -> Non
         return
 
     try:
-        sig = ENGINE.analyze(tfs)
+        results = ROUTER.analyze(tfs)
     except Exception:
-        logging.exception("Engine analyze failed")
+        logging.exception("Router failed")
         return
 
-    ok, reason = should_send(sig, STATE, bypass_dedup=bypass_dedup)
-
-    if not ok:
-        _log_signal(sig, f"skipped:{reason.value if reason else 'unknown'}")
-        if sig["tier"] == "NO_SIGNAL" and sig.get("killzone"):
+    if not results:
+        kz = get_killzone()
+        if kz:
             rsi = None
             try:
                 enriched = classic.add_classic(tfs["H1"])
                 val = enriched["RSI_14"].iloc[-1]
                 rsi = float(val) if not pd.isna(val) else None
             except Exception:
-                pass
+                logging.exception("No-signal RSI calculation failed")
+            price = float(tfs["M15"]["Close"].iloc[-1])
             msg = formatter.format_no_signal_killzone(
-                killzone=sig["killzone"], price=sig["entry"], rsi=rsi)
+                killzone=kz, price=price, rsi=rsi)
             try:
                 await app.bot.send_message(
                     chat_id=ENV["TELEGRAM_CHAT_ID"], text=msg,
@@ -127,16 +127,22 @@ async def _scan_and_send(app: Application, *, bypass_dedup: bool = False) -> Non
                 logging.exception("Telegram no-signal send failed")
         return
 
-    text = _format(sig)
-    try:
-        await app.bot.send_message(
-            chat_id=ENV["TELEGRAM_CHAT_ID"], text=text,
-            parse_mode=ParseMode.MARKDOWN)
-        _persist(sig)
-        _log_signal(sig, "sent")
-    except Exception:
-        logging.exception("Telegram send failed")
-        _log_signal(sig, "send_failed")
+    for sig in results:
+        ok, reason = should_send(sig, STATE, bypass_dedup=bypass_dedup)
+        if not ok:
+            _log_signal(sig, f"skipped:{reason.value if reason else 'unknown'}")
+            continue
+
+        text = _format(sig)
+        try:
+            await app.bot.send_message(
+                chat_id=ENV["TELEGRAM_CHAT_ID"], text=text,
+                parse_mode=ParseMode.MARKDOWN)
+            _persist(sig)
+            _log_signal(sig, "sent")
+        except Exception:
+            logging.exception("Telegram send failed")
+            _log_signal(sig, "send_failed")
 
 
 async def cmd_start(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:

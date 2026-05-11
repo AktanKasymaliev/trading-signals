@@ -15,7 +15,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from xau_pro_bot.signals.engine import MasterSignalEngine
+from xau_pro_bot.signals.router import StreamRouter
 
 
 @dataclass
@@ -82,8 +82,12 @@ def _outcome(future: pd.DataFrame, entry: float, sl: float,
 
 def run_backtest(history: dict[str, pd.DataFrame],
                  timeout_bars: int = 48,
-                 step: int = 4) -> BacktestResult:
-    eng = MasterSignalEngine()
+                 step: int = 4,
+                 stream: str = "intraday") -> BacktestResult:
+    router = StreamRouter()
+    if stream not in router.analyzers:
+        raise ValueError(f"Unknown stream: {stream}")
+    analyzer = router.analyzers[stream]
     res = BacktestResult()
     h1 = history["H1"]
     if len(h1) < 250:
@@ -95,10 +99,10 @@ def run_backtest(history: dict[str, pd.DataFrame],
         for tf, df in history.items():
             slice_data[tf] = df.loc[:cutoff].tail(720)
         try:
-            sig = eng.analyze(slice_data)
+            sig = analyzer.analyze(slice_data)
         except Exception:
             continue
-        if sig["tier"] == "NO_SIGNAL" or sig.get("tp1") is None:
+        if sig is None or sig["tier"] == "NO_SIGNAL" or sig.get("tp1") is None:
             continue
         res.signals_generated += 1
         target = sig.get("tp2") or sig["tp1"]
@@ -124,6 +128,8 @@ def _cli() -> int:
     p.add_argument("--csv", required=True)
     p.add_argument("--timeout-bars", type=int, default=48)
     p.add_argument("--step", type=int, default=4)
+    p.add_argument("--stream", default="intraday",
+                   choices=["intraday", "swing", "scalp", "all"])
     p.add_argument("--export", default=None)
     args = p.parse_args()
 
@@ -136,19 +142,27 @@ def _cli() -> int:
         "D1": _resample(h1, "1D"),
         "W1": _resample(h1, "1W"),
     }
-    res = run_backtest(history, timeout_bars=args.timeout_bars, step=args.step)
-    print(f"Signals:    {res.signals_generated}")
-    print(f"Wins/Loss:  {res.wins} / {res.losses} (timeouts {res.timeouts})")
-    print(f"Win rate:   {res.win_rate:.1%}")
-    print(f"Expectancy: {res.expectancy:.2f} R")
-    print(f"Profit f.:  {res.profit_factor:.2f}")
-    print("By tier:")
-    for tier, st in res.per_tier.items():
-        if st["n"]:
-            wr = st["w"] / st["n"]
-            print(f"  {tier}: n={st['n']} wr={wr:.1%}")
+    streams = ["intraday", "swing", "scalp"] if args.stream == "all" else [args.stream]
+    default_timeouts = {"intraday": args.timeout_bars, "swing": 336, "scalp": 8}
+    export_rows: list[dict[str, float | str]] = []
+    for s in streams:
+        timeout = default_timeouts[s]
+        res = run_backtest(history, timeout_bars=timeout,
+                           step=args.step, stream=s)
+        print(f"\n=== Stream: {s} ===")
+        print(f"Signals:    {res.signals_generated}")
+        print(f"Wins/Loss:  {res.wins} / {res.losses} (timeouts {res.timeouts})")
+        print(f"Win rate:   {res.win_rate:.1%}")
+        print(f"Expectancy: {res.expectancy:.2f} R")
+        print(f"Profit f.:  {res.profit_factor:.2f}")
+        print("By tier:")
+        for tier, st in res.per_tier.items():
+            if st["n"]:
+                wr = st["w"] / st["n"]
+                print(f"  {tier}: n={st['n']} wr={wr:.1%}")
+        export_rows.extend({"stream": s, "R": r} for r in res.pnl_r)
     if args.export:
-        pd.DataFrame({"R": res.pnl_r}).to_csv(args.export, index=False)
+        pd.DataFrame(export_rows).to_csv(args.export, index=False)
     return 0
 
 
