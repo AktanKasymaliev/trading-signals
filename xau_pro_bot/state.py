@@ -28,7 +28,6 @@ CREATE TABLE IF NOT EXISTS signals (
 CREATE INDEX IF NOT EXISTS idx_signals_ts ON signals(ts_utc);
 CREATE INDEX IF NOT EXISTS idx_signals_dir ON signals(direction);
 CREATE INDEX IF NOT EXISTS idx_signals_tier ON signals(tier);
-CREATE INDEX IF NOT EXISTS idx_signals_stream ON signals(stream);
 """
 
 
@@ -51,9 +50,9 @@ class State:
                 "ALTER TABLE signals ADD COLUMN stream TEXT NOT NULL "
                 "DEFAULT 'intraday'"
             )
-            self._conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_signals_stream ON signals(stream)"
-            )
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_signals_stream ON signals(stream)"
+        )
 
     def close(self) -> None:
         self._conn.close()
