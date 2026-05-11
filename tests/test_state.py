@@ -100,6 +100,7 @@ def test_migration_adds_stream_column(tmp_path):
         "VALUES (?, 'BUY', 'STRONG', 70, 2000, 1995)",
         (datetime.now(timezone.utc).isoformat(),),
     )
+    conn.commit()
     conn.close()
 
     st = _State(db_path=db_path)
