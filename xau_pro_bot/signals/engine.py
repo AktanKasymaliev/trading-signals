@@ -13,6 +13,7 @@ from xau_pro_bot.indicators import classic, wyckoff
 from xau_pro_bot.indicators.ict import (
     find_fvg, find_order_blocks, find_liquidity, get_killzone,
 )
+from xau_pro_bot.indicators.sr_zones import find_sr_zones
 from xau_pro_bot.signals.ict_signals import score_ict
 from xau_pro_bot.signals.smc_signals import score_smc
 from xau_pro_bot.signals.classic_signals import score_classic
@@ -159,8 +160,12 @@ class MasterSignalEngine:
         h1_atr_val = h1["ATR_14"].iloc[-1] if "ATR_14" in h1 else 1.0
         h1_atr = float(h1_atr_val) if not pd.isna(h1_atr_val) else 1.0
 
+        current_price = float(m15["Close"].iloc[-1])
+        sr = find_sr_zones(h4_df=h4, d1_df=d1, current_price=current_price)
+        liq = find_liquidity(h1, lookback=30)
+
         macro_bull, macro_bear, macro_reasons = self._macro_bias(w1, d1)
-        smc_bull, smc_bear, smc_reasons = score_smc(h4)
+        smc_bull, smc_bear, smc_reasons = score_smc(h4, sr_zones=sr, liquidity=liq)
         ict_bull, ict_bear, ict_reasons = score_ict(h1, m15, h1_atr)
         cls_bull, cls_bear, cls_reasons = score_classic(h1, m15)
 
