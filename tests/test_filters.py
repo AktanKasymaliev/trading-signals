@@ -67,3 +67,50 @@ def test_weak_cooldown(state):
     new_sig = _sig(tier="WEAK", score=42, entry=2100.0)
     ok, reason = should_send(new_sig, state)
     assert not ok and reason == SkipReason.WEAK_COOLDOWN
+
+
+# ── Per-stream tests (R3) ─────────────────────────────
+
+
+def test_swing_per_day_cap(state):
+    sig = _sig()
+    sig["stream"] = "swing"
+    for _ in range(2):
+        state.record_signal({**sig, "ts_utc": datetime.now(timezone.utc).isoformat(),
+                             "reasons_json": "{}"})
+    new_sig = _sig(entry=2200.0)
+    new_sig["stream"] = "swing"
+    ok, reason = should_send(new_sig, state)
+    assert not ok and reason == SkipReason.RATE_LIMIT_DAY
+
+
+def test_swing_same_direction_24h(state):
+    sig = _sig(direction="BUY")
+    sig["stream"] = "swing"
+    state.record_signal({**sig, "ts_utc": datetime.now(timezone.utc).isoformat(),
+                         "reasons_json": "{}"})
+    new_sig = _sig(direction="BUY", entry=2050.0)
+    new_sig["stream"] = "swing"
+    ok, reason = should_send(new_sig, state)
+    assert not ok and reason == SkipReason.SWING_DIRECTION_COOLDOWN
+
+
+def test_scalp_min_gap_30min(state):
+    sig = _sig()
+    sig["stream"] = "scalp"
+    sig["killzone"] = "London KZ"
+    state.record_signal({**sig, "ts_utc": datetime.now(timezone.utc).isoformat(),
+                         "reasons_json": "{}"})
+    new_sig = _sig(entry=2010.0)
+    new_sig["stream"] = "scalp"
+    new_sig["killzone"] = "London KZ"
+    ok, reason = should_send(new_sig, state)
+    assert not ok and reason == SkipReason.SCALP_GAP
+
+
+def test_scalp_must_be_in_killzone(state):
+    sig = _sig()
+    sig["stream"] = "scalp"
+    sig["killzone"] = None
+    ok, reason = should_send(sig, state)
+    assert not ok and reason == SkipReason.SCALP_OUTSIDE_KZ
