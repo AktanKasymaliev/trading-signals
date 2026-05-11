@@ -47,12 +47,16 @@ def find_swing_setup(d1_df: pd.DataFrame, h4_df: pd.DataFrame) -> dict[str, Any]
 
     sl_buffer = sl_buffer_pips * config.XAU_PIP_VALUE
 
+    # In an uptrend (BUY) we wait for a shallow pullback from the low and
+    # target the swing high. In a downtrend (SELL) we wait for a shallow
+    # bounce from the high and target the swing low. This gives both a
+    # reasonable RR and a meaningful "from entry toward opposite swing" TP.
     if direction == "BUY":
-        entry = swing_high - fib * full_range_usd
+        entry = swing_low + fib * full_range_usd
         tp = swing_high
         sl = swing_low - sl_buffer
     else:
-        entry = swing_low + fib * full_range_usd
+        entry = swing_high - fib * full_range_usd
         tp = swing_low
         sl = swing_high + sl_buffer
 
