@@ -1,0 +1,80 @@
+"""Configuration constants and environment loader."""
+
+from __future__ import annotations
+
+import os
+from datetime import time
+from typing import Iterable
+
+from dotenv import load_dotenv
+
+load_dotenv()
+
+# ── Tiers ─────────────────────────────────────────────
+STRONG_SIGNAL = 65
+NORMAL_SIGNAL = 50
+WEAK_SIGNAL = 40
+
+# ── Risk ──────────────────────────────────────────────
+MIN_RR = 1.8
+
+# ── Dedup & reprice ───────────────────────────────────
+DEDUP_HOURS = 2
+REPRICE_ATR_MULT = 1.5
+
+# ── Rate limits ───────────────────────────────────────
+MAX_SIGNALS_PER_DAY = 6
+WEAK_COOLDOWN_HOURS = 4
+
+# ── Scan intervals (seconds) ──────────────────────────
+KILLZONE_SCAN_INTERVAL = 300
+BACKGROUND_SCAN_INTERVAL = 900
+
+# ── ICT / SMC ─────────────────────────────────────────
+OTE_LOW = 0.62
+OTE_HIGH = 0.79
+FVG_LOOKBACK = 30
+OB_LOOKBACK = 50
+LIQUIDITY_TOL = 0.002
+SWING_LOOKBACK = 15
+WYCKOFF_BARS = 60
+
+# ── Timezone & killzones (NY local time) ──────────────
+TIMEZONE = "America/New_York"
+
+KILLZONES_NY: dict[str, tuple[time, time]] = {
+    "Asian KZ":   (time(20, 0), time(23, 59)),
+    "London KZ":  (time(2, 0),  time(5, 0)),
+    "NY AM KZ":   (time(8, 30), time(11, 0)),
+    "NY PM KZ":   (time(13, 30), time(16, 0)),
+}
+
+PRIORITY_KILLZONES = {"London KZ", "NY AM KZ"}
+
+# ── Data ──────────────────────────────────────────────
+SYMBOL = "XAU/USD"
+TF_SPEC = {
+    "W1":  ("1week",  104),
+    "D1":  ("1day",   365),
+    "H4":  ("4h",     540),
+    "H1":  ("1h",     720),
+    "M15": ("15min",  672),
+}
+DATA_CACHE_TTL_SECONDS = 300
+DATA_RETRY_ATTEMPTS = 3
+DATA_RETRY_DELAY_SECONDS = 5
+
+
+def load_env(required: Iterable[str]) -> dict[str, str]:
+    """Load and validate required environment variables."""
+    env: dict[str, str] = {}
+    missing: list[str] = []
+    for key in required:
+        value = os.getenv(key)
+        if value is None or value == "":
+            missing.append(key)
+        else:
+            env[key] = value
+    if missing:
+        raise RuntimeError(f"Missing required env vars: {', '.join(missing)}")
+    return env
