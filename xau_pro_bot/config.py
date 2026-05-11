@@ -64,6 +64,21 @@ DATA_CACHE_TTL_SECONDS = 300
 DATA_RETRY_ATTEMPTS = 3
 DATA_RETRY_DELAY_SECONDS = 5
 
+# ── XAU pip ───────────────────────────────────────────
+XAU_PIP_VALUE = 0.10  # USD per pip
+
+# ── Per-stream rate limits ────────────────────────────
+MAX_INTRADAY_PER_DAY = 6
+MAX_SWING_PER_DAY = 2
+MAX_SCALP_PER_DAY = 4
+SCALP_MIN_GAP_MINUTES = 30
+SWING_DIRECTION_COOLDOWN_HOURS = 24
+
+# Stream identifiers
+STREAM_INTRADAY = "intraday"
+STREAM_SWING = "swing"
+STREAM_SCALP = "scalp"
+
 
 def load_env(required: Iterable[str]) -> dict[str, str]:
     """Load and validate required environment variables."""

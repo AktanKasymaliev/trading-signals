@@ -22,11 +22,13 @@ CREATE TABLE IF NOT EXISTS signals (
     tp3 REAL,
     rr REAL,
     killzone TEXT,
-    reasons_json TEXT
+    reasons_json TEXT,
+    stream TEXT NOT NULL DEFAULT 'intraday'
 );
 CREATE INDEX IF NOT EXISTS idx_signals_ts ON signals(ts_utc);
 CREATE INDEX IF NOT EXISTS idx_signals_dir ON signals(direction);
 CREATE INDEX IF NOT EXISTS idx_signals_tier ON signals(tier);
+CREATE INDEX IF NOT EXISTS idx_signals_stream ON signals(stream);
 """
 
 
@@ -39,50 +41,84 @@ class State:
         self._conn = sqlite3.connect(self.db_path, isolation_level=None)
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(SCHEMA)
+        self._migrate()
+
+    def _migrate(self) -> None:
+        cols = [r[1] for r in self._conn.execute(
+            "PRAGMA table_info(signals)").fetchall()]
+        if "stream" not in cols:
+            self._conn.execute(
+                "ALTER TABLE signals ADD COLUMN stream TEXT NOT NULL "
+                "DEFAULT 'intraday'"
+            )
+            self._conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_signals_stream ON signals(stream)"
+            )
 
     def close(self) -> None:
         self._conn.close()
 
     def record_signal(self, sig: dict[str, Any]) -> int:
         cols = ("ts_utc", "direction", "tier", "score", "entry", "sl",
-                "tp1", "tp2", "tp3", "rr", "killzone", "reasons_json")
+                "tp1", "tp2", "tp3", "rr", "killzone", "reasons_json", "stream")
         placeholders = ", ".join("?" * len(cols))
+        values = tuple(
+            sig.get(c) if c != "stream" else sig.get("stream", "intraday")
+            for c in cols
+        )
         cur = self._conn.execute(
             f"INSERT INTO signals ({', '.join(cols)}) VALUES ({placeholders})",
-            tuple(sig.get(c) for c in cols),
+            values,
         )
         return int(cur.lastrowid or 0)
 
-    def last_signal(self, direction: str | None = None) -> dict[str, Any] | None:
-        if direction is None:
-            row = self._conn.execute(
-                "SELECT * FROM signals ORDER BY id DESC LIMIT 1"
-            ).fetchone()
-        else:
-            row = self._conn.execute(
-                "SELECT * FROM signals WHERE direction = ? ORDER BY id DESC LIMIT 1",
-                (direction,),
-            ).fetchone()
+    def last_signal(self, direction: str | None = None,
+                    stream: str | None = None) -> dict[str, Any] | None:
+        where = []
+        params: list[Any] = []
+        if direction:
+            where.append("direction = ?")
+            params.append(direction)
+        if stream:
+            where.append("stream = ?")
+            params.append(stream)
+        clause = ("WHERE " + " AND ".join(where)) if where else ""
+        row = self._conn.execute(
+            f"SELECT * FROM signals {clause} ORDER BY id DESC LIMIT 1",
+            tuple(params),
+        ).fetchone()
         return dict(row) if row else None
 
-    def count_today(self, tier: str | None = None) -> int:
+    def count_today(self, tier: str | None = None,
+                    stream: str | None = None) -> int:
         today = datetime.now(timezone.utc).date().isoformat()
-        if tier is None:
-            row = self._conn.execute(
-                "SELECT COUNT(*) AS n FROM signals WHERE substr(ts_utc, 1, 10) = ?",
-                (today,),
-            ).fetchone()
-        else:
-            row = self._conn.execute(
-                "SELECT COUNT(*) AS n FROM signals "
-                "WHERE substr(ts_utc, 1, 10) = ? AND tier = ?",
-                (today, tier),
-            ).fetchone()
+        where = ["substr(ts_utc, 1, 10) = ?"]
+        params: list[Any] = [today]
+        if tier:
+            where.append("tier = ?")
+            params.append(tier)
+        if stream:
+            where.append("stream = ?")
+            params.append(stream)
+        row = self._conn.execute(
+            f"SELECT COUNT(*) AS n FROM signals WHERE {' AND '.join(where)}",
+            tuple(params),
+        ).fetchone()
         return int(row["n"])
 
-    def last_weak_ts(self) -> datetime | None:
+    def last_weak_ts(self, stream: str = "intraday") -> datetime | None:
         row = self._conn.execute(
-            "SELECT ts_utc FROM signals WHERE tier = 'WEAK' "
+            "SELECT ts_utc FROM signals WHERE tier = 'WEAK' AND stream = ? "
+            "ORDER BY id DESC LIMIT 1",
+            (stream,),
+        ).fetchone()
+        if not row:
+            return None
+        return datetime.fromisoformat(row["ts_utc"])
+
+    def last_scalp_ts(self) -> datetime | None:
+        row = self._conn.execute(
+            "SELECT ts_utc FROM signals WHERE stream = 'scalp' "
             "ORDER BY id DESC LIMIT 1"
         ).fetchone()
         if not row:
