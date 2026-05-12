@@ -53,6 +53,59 @@ def test_ai_disabled_keeps_baseline_scores_and_adds_disabled_fields(all_tfs):
     }
 
 
+def test_default_constructor_ai_disabled_does_not_instantiate_model(
+    monkeypatch,
+    all_tfs,
+):
+    monkeypatch.delenv("AI_ENABLED", raising=False)
+
+    def fail_if_instantiated(*args: Any, **kwargs: Any) -> None:
+        raise AssertionError("HFTradingModel should not be instantiated when AI is disabled")
+
+    monkeypatch.setattr(
+        "xau_pro_bot.signals.engine.HFTradingModel",
+        fail_if_instantiated,
+    )
+
+    result = MasterSignalEngine().analyze(all_tfs)
+
+    assert _ai_fields(result) == {
+        "ai_enabled": False,
+        "ai_direction": None,
+        "ai_confidence": None,
+        "ai_reason": None,
+        "ai_blocked": False,
+        "ai_score_delta_buy": 0,
+        "ai_score_delta_sell": 0,
+    }
+
+
+def test_env_disabled_false_does_not_instantiate_model(monkeypatch, all_tfs):
+    monkeypatch.setenv("AI_ENABLED", "false")
+    monkeypatch.setenv("AI_MODEL_ID", "some/model")
+
+    def fail_if_instantiated(*args: Any, **kwargs: Any) -> None:
+        raise AssertionError("HFTradingModel should not be instantiated when AI is disabled")
+
+    monkeypatch.setattr(
+        "xau_pro_bot.signals.engine.HFTradingModel",
+        fail_if_instantiated,
+    )
+
+    result = MasterSignalEngine().analyze(all_tfs)
+
+    assert result["ai_enabled"] is False
+    assert _ai_fields(result) == {
+        "ai_enabled": False,
+        "ai_direction": None,
+        "ai_confidence": None,
+        "ai_reason": None,
+        "ai_blocked": False,
+        "ai_score_delta_buy": 0,
+        "ai_score_delta_sell": 0,
+    }
+
+
 def test_ai_buy_high_confidence_increases_buy_score(downtrend_df):
     tfs = _all_tfs(downtrend_df)
     baseline = MasterSignalEngine(ai_enabled=False).analyze(tfs)
