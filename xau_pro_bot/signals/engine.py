@@ -30,6 +30,9 @@ class MasterSignalEngine:
         ai_enabled: bool | None = None,
         ai_model: Any | None = None,
     ) -> None:
+        # HFTradingModel is created once per engine instance. The adapter lazy-loads
+        # the underlying model on first predict() and caches it, so subsequent
+        # analyze() calls on the same engine reuse the loaded model.
         ai_cfg = config.load_ai_config()
         self.ai_enabled = bool(ai_cfg["enabled"] if ai_enabled is None else ai_enabled)
         self.ai_model = ai_model
