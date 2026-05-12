@@ -29,10 +29,12 @@ class HFTradingModel:
         model_id: str,
         model_type: str = "sklearn",
         cache_dir: str | None = None,
+        revision: str | None = None,
     ) -> None:
         self.model_id = model_id
         self.model_type = model_type
         self.cache_dir = cache_dir
+        self.revision = revision
         self._model: Any | None = None
 
     def _neutral(self, error: str) -> dict[str, Any]:
@@ -63,6 +65,11 @@ class HFTradingModel:
         return self._model
 
     def _load_sklearn(self) -> Any:
+        if not self.revision:
+            raise RuntimeError(
+                "sklearn/joblib models require a pinned revision for Hugging Face artifacts"
+            )
+
         last_error: Exception | None = None
         for filename in _SKLEARN_FILENAMES:
             try:
@@ -75,6 +82,7 @@ class HFTradingModel:
                     repo_id=self.model_id,
                     filename=filename,
                     cache_dir=self.cache_dir,
+                    revision=self.revision,
                 )
                 model = joblib.load(path)
                 log.info(

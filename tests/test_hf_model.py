@@ -40,7 +40,12 @@ def test_sklearn_predict_proba_output(monkeypatch):
         "xau_pro_bot.models.hf_model.joblib.load",
         lambda path: ProbModel(),
     )
-    model = hf_model.HFTradingModel("owner/model", "sklearn", cache_dir="/tmp/cache")
+    model = hf_model.HFTradingModel(
+        "owner/model",
+        "sklearn",
+        cache_dir="/tmp/cache",
+        revision="abc123",
+    )
 
     pred = model.predict(pd.DataFrame([{"x": 1.0}]))
 
@@ -61,7 +66,7 @@ def test_sklearn_numeric_classes(monkeypatch):
         "xau_pro_bot.models.hf_model.joblib.load",
         lambda path: NumericProbModel(),
     )
-    model = hf_model.HFTradingModel("owner/model", "sklearn")
+    model = hf_model.HFTradingModel("owner/model", "sklearn", revision="abc123")
 
     pred = model.predict(pd.DataFrame([{"x": 1.0}]))
 
@@ -82,7 +87,7 @@ def test_predict_only_model_uses_default_confidence(monkeypatch):
         "xau_pro_bot.models.hf_model.joblib.load",
         lambda path: PredictOnlyModel(),
     )
-    model = hf_model.HFTradingModel("owner/model", "sklearn")
+    model = hf_model.HFTradingModel("owner/model", "sklearn", revision="abc123")
 
     pred = model.predict(pd.DataFrame([{"x": 1.0}]))
 
@@ -100,7 +105,7 @@ def test_safe_fallback_on_download_exception(monkeypatch):
         raise RuntimeError("network unavailable")
 
     monkeypatch.setattr("xau_pro_bot.models.hf_model.hf_hub_download", boom)
-    model = hf_model.HFTradingModel("owner/model", "sklearn")
+    model = hf_model.HFTradingModel("owner/model", "sklearn", revision="abc123")
 
     pred = model.predict(pd.DataFrame([{"x": 1.0}]))
 
@@ -150,7 +155,7 @@ def test_no_model_loaded_before_predict(monkeypatch):
     monkeypatch.setattr("xau_pro_bot.models.hf_model.hf_hub_download", fake_download)
     monkeypatch.setattr("xau_pro_bot.models.hf_model.joblib.load", fake_load)
 
-    model = hf_model.HFTradingModel("owner/model", "sklearn")
+    model = hf_model.HFTradingModel("owner/model", "sklearn", revision="abc123")
 
     assert download_calls == []
     assert load_calls == []
@@ -175,7 +180,7 @@ def test_sklearn_artifact_filenames_are_tried_in_order(monkeypatch):
         "xau_pro_bot.models.hf_model.joblib.load",
         lambda path: PredictOnlyModel(),
     )
-    model = hf_model.HFTradingModel("owner/model", "sklearn")
+    model = hf_model.HFTradingModel("owner/model", "sklearn", revision="abc123")
 
     pred = model.predict(pd.DataFrame([{"x": 1.0}]))
 
@@ -186,6 +191,57 @@ def test_sklearn_artifact_filenames_are_tried_in_order(monkeypatch):
         "classifier.joblib",
         "trading_model.joblib",
     ]
+
+
+def test_sklearn_without_revision_does_not_download_or_load(monkeypatch):
+    hf_model = _hf_model_module()
+    download_calls = []
+    load_calls = []
+
+    def fake_download(**kwargs):
+        download_calls.append(kwargs)
+        return "/tmp/model.joblib"
+
+    def fake_load(path):
+        load_calls.append(path)
+        return ProbModel()
+
+    monkeypatch.setattr("xau_pro_bot.models.hf_model.hf_hub_download", fake_download)
+    monkeypatch.setattr("xau_pro_bot.models.hf_model.joblib.load", fake_load)
+    model = hf_model.HFTradingModel("owner/model", "sklearn")
+
+    pred = model.predict(pd.DataFrame([{"x": 1.0}]))
+
+    assert pred["direction"] == "NO_TRADE"
+    assert pred["confidence"] == 0.0
+    assert pred["prob_buy"] is None
+    assert pred["prob_sell"] is None
+    assert pred["prob_no_trade"] is None
+    assert "pinned revision" in pred["error"]
+    assert download_calls == []
+    assert load_calls == []
+
+
+def test_sklearn_with_revision_passes_revision_to_download(monkeypatch):
+    hf_model = _hf_model_module()
+    download_calls = []
+
+    def fake_download(**kwargs):
+        download_calls.append(kwargs)
+        return "/tmp/model.joblib"
+
+    monkeypatch.setattr("xau_pro_bot.models.hf_model.hf_hub_download", fake_download)
+    monkeypatch.setattr(
+        "xau_pro_bot.models.hf_model.joblib.load",
+        lambda path: ProbModel(),
+    )
+    model = hf_model.HFTradingModel("owner/model", "sklearn", revision="abc123")
+
+    pred = model.predict(pd.DataFrame([{"x": 1.0}]))
+
+    assert pred["direction"] == "BUY"
+    assert pred["confidence"] == 0.72
+    assert download_calls[0]["revision"] == "abc123"
 
 
 def test_custom_mode_returns_neutral_with_error():
