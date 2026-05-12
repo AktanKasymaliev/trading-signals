@@ -30,6 +30,20 @@ def _is_commit_sha(revision: str | None) -> bool:
 class HFTradingModel:
     """Lazy-loaded optional model adapter for AI signal confirmation."""
 
+    _LABEL_ALIASES = {
+        "BUY": "BUY",
+        "LONG": "BUY",
+        "UP": "BUY",
+        "SELL": "SELL",
+        "SHORT": "SELL",
+        "DOWN": "SELL",
+        "NO_TRADE": "NO_TRADE",
+        "NOTRADE": "NO_TRADE",
+        "HOLD": "NO_TRADE",
+        "NEUTRAL": "NO_TRADE",
+        "FLAT": "NO_TRADE",
+    }
+
     def __init__(
         self,
         model_id: str,
@@ -128,42 +142,38 @@ class HFTradingModel:
             tokenizer=self.model_id,
         )
 
-    def _normalize_class(self, value: Any) -> str:
+    def _normalize_class(self, value: Any) -> str | None:
+        """Map a model class label to BUY/SELL/NO_TRADE, or None if unrecognized."""
         if value == 1:
             return "BUY"
         if value == -1:
             return "SELL"
         if value == 0:
             return "NO_TRADE"
-
-        label = str(value).strip().upper().replace(" ", "_")
-        if label == "BUY":
-            return "BUY"
-        if label == "SELL":
-            return "SELL"
-        if label in {"NO_TRADE", "HOLD", "NEUTRAL"}:
-            return "NO_TRADE"
-        return label
+        label = str(value).strip().upper().replace(" ", "_").replace("-", "_")
+        return self._LABEL_ALIASES.get(label)
 
     def _predict_sklearn(self, model: Any, features: pd.DataFrame) -> dict[str, Any]:
         if hasattr(model, "predict_proba"):
             probabilities = np.asarray(model.predict_proba(features))[0]
             classes = getattr(model, "classes_", np.arange(len(probabilities)))
-            mapped = {
-                self._normalize_class(cls): float(probability)
-                for cls, probability in zip(classes, probabilities)
-            }
+            mapped: dict[str, float] = {}
+            for cls, probability in zip(classes, probabilities):
+                normalized = self._normalize_class(cls)
+                if normalized is None:
+                    continue
+                mapped[normalized] = mapped.get(normalized, 0.0) + float(probability)
+
+            if not mapped:
+                raise RuntimeError(
+                    f"unrecognized model classes_: {list(classes)!r}; "
+                    "expected BUY/SELL/NO_TRADE (or LONG/SHORT/FLAT) labels"
+                )
+
             prob_buy = mapped.get("BUY")
             prob_sell = mapped.get("SELL")
             prob_no_trade = mapped.get("NO_TRADE")
-            direction, confidence = max(
-                (
-                    ("BUY", prob_buy or 0.0),
-                    ("SELL", prob_sell or 0.0),
-                    ("NO_TRADE", prob_no_trade or 0.0),
-                ),
-                key=lambda item: item[1],
-            )
+            direction, confidence = max(mapped.items(), key=lambda item: item[1])
             return {
                 "direction": direction,
                 "confidence": float(confidence),
@@ -173,8 +183,13 @@ class HFTradingModel:
             }
 
         prediction = np.asarray(model.predict(features))[0]
+        normalized = self._normalize_class(prediction)
+        if normalized is None:
+            raise RuntimeError(
+                f"unrecognized model.predict output: {prediction!r}"
+            )
         return {
-            "direction": self._normalize_class(prediction),
+            "direction": normalized,
             "confidence": 0.50,
             "prob_buy": None,
             "prob_sell": None,
