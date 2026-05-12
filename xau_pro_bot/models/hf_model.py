@@ -50,11 +50,13 @@ class HFTradingModel:
         model_type: str = "sklearn",
         cache_dir: str | None = None,
         revision: str | None = None,
+        filename: str = "",
     ) -> None:
         self.model_id = model_id
         self.model_type = model_type
         self.cache_dir = cache_dir
         self.revision = revision
+        self.filename = filename
         self._model: Any | None = None
 
     def _neutral(self, error: str) -> dict[str, Any]:
@@ -91,8 +93,13 @@ class HFTradingModel:
                 "for Hugging Face artifacts"
             )
 
+        if self.filename:
+            candidates = (self.filename,)
+        else:
+            candidates = _SKLEARN_FILENAMES
+
         last_error: Exception | None = None
-        for filename in _SKLEARN_FILENAMES:
+        for filename in candidates:
             try:
                 log.info(
                     "Attempting to download Hugging Face sklearn artifact %s from %s",
