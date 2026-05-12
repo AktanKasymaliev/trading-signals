@@ -127,3 +127,27 @@ def test_ai_config_revision_from_env(monkeypatch):
     monkeypatch.setenv("AI_MODEL_REVISION", sha)
     cfg = config.load_ai_config()
     assert cfg["revision"] == sha
+
+
+def test_ai_config_includes_model_filename_default_empty(monkeypatch):
+    monkeypatch.delenv("AI_MODEL_FILENAME", raising=False)
+    cfg = config.load_ai_config()
+    assert cfg["model_filename"] == ""
+
+
+def test_ai_config_model_filename_from_env(monkeypatch):
+    monkeypatch.setenv("AI_MODEL_FILENAME", "trading_model_15m.pkl")
+    cfg = config.load_ai_config()
+    assert cfg["model_filename"] == "trading_model_15m.pkl"
+
+
+def test_ai_config_feature_set_default_internal(monkeypatch):
+    monkeypatch.delenv("AI_FEATURE_SET", raising=False)
+    cfg = config.load_ai_config()
+    assert cfg["feature_set"] == "internal"
+
+
+def test_ai_config_feature_set_smc_v2(monkeypatch):
+    monkeypatch.setenv("AI_FEATURE_SET", "smc_v2")
+    cfg = config.load_ai_config()
+    assert cfg["feature_set"] == "smc_v2"

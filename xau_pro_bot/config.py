@@ -140,6 +140,8 @@ def load_ai_config() -> dict[str, str | bool | float | int]:
         "conflict_penalty": _env_int("AI_CONFLICT_PENALTY", 10),
         "cache_dir": os.getenv("AI_CACHE_DIR", "./models_cache"),
         "revision": os.getenv("AI_MODEL_REVISION", ""),
+        "model_filename": os.getenv("AI_MODEL_FILENAME", ""),
+        "feature_set": os.getenv("AI_FEATURE_SET", "internal"),
     }
 
 
