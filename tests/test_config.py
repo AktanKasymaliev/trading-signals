@@ -114,3 +114,16 @@ def test_load_ai_config_reports_malformed_numeric_env(monkeypatch):
 
     with pytest.raises(RuntimeError, match="AI_MIN_CONFIDENCE"):
         config.load_ai_config()
+
+
+def test_ai_config_includes_revision_default_empty(monkeypatch):
+    monkeypatch.delenv("AI_MODEL_REVISION", raising=False)
+    cfg = config.load_ai_config()
+    assert cfg["revision"] == ""
+
+
+def test_ai_config_revision_from_env(monkeypatch):
+    sha = "a" * 40
+    monkeypatch.setenv("AI_MODEL_REVISION", sha)
+    cfg = config.load_ai_config()
+    assert cfg["revision"] == sha
