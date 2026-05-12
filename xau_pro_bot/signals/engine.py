@@ -116,9 +116,22 @@ class MasterSignalEngine:
             return self._disabled_ai_fields()
 
         if self.ai_model is None:
-            prediction = {"direction": "NO_TRADE", "confidence": 0.0}
+            prediction: dict[str, Any] = {
+                "direction": "NO_TRADE",
+                "confidence": 0.0,
+            }
         else:
-            features = build_ai_features(data)
+            features, complete = build_ai_features(data)
+            if not complete:
+                return {
+                    "ai_enabled": True,
+                    "ai_direction": None,
+                    "ai_confidence": None,
+                    "ai_reason": "AI skipped: incomplete input features",
+                    "ai_blocked": False,
+                    "ai_score_delta_buy": 0,
+                    "ai_score_delta_sell": 0,
+                }
             prediction = self.ai_model.predict(features)
 
         adjustment = ai_prediction_to_adjustment(prediction, deterministic_direction)

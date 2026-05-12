@@ -121,8 +121,14 @@ def _timestamp_features(df: pd.DataFrame) -> tuple[int, int]:
     return int(ts.hour), int(ts.dayofweek)
 
 
-def build_ai_features(tfs: dict[str, pd.DataFrame]) -> pd.DataFrame:
-    """Build exactly one deterministic feature row for AI inference."""
+def build_ai_features(
+    tfs: dict[str, pd.DataFrame],
+) -> tuple[pd.DataFrame, bool]:
+    """Build exactly one deterministic feature row and a completeness flag.
+
+    Returns (DataFrame, complete). When complete is False, callers should skip
+    AI inference for this bar — required price/EMA values were missing.
+    """
     m15 = _with_classic(_copy_df(tfs, "M15"))
     h1 = _with_classic(_copy_df(tfs, "H1"))
     h4 = _with_classic(_copy_df(tfs, "H4"))
@@ -147,6 +153,13 @@ def build_ai_features(tfs: dict[str, pd.DataFrame]) -> pd.DataFrame:
     ema21_h1 = _last_float(h1, "EMA_21")
     ema50_h1 = _last_float(h1, "EMA_50")
     ema200_h1 = _last_float(h1, "EMA_200")
+
+    complete = (
+        not pd.isna(close_h1)
+        and not pd.isna(ema50_h1)
+        and not h1.empty
+        and not m15.empty
+    )
 
     row: dict[str, Any] = {
         "close_m15": _last_float(m15, "Close"),
@@ -179,7 +192,9 @@ def build_ai_features(tfs: dict[str, pd.DataFrame]) -> pd.DataFrame:
         "hour_utc": hour,
         "day_of_week": day,
     }
-    return pd.DataFrame(
+    df = pd.DataFrame(
         [[row[name] for name in REQUIRED_AI_FEATURES]],
         columns=REQUIRED_AI_FEATURES,
     )
+    df = df.fillna(0.0)
+    return df, complete

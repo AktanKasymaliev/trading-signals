@@ -7,7 +7,7 @@ from xau_pro_bot.models.features import REQUIRED_AI_FEATURES, build_ai_features
 
 
 def test_build_ai_features_returns_one_row(all_tfs):
-    features = build_ai_features(all_tfs)
+    features, _ = build_ai_features(all_tfs)
 
     assert isinstance(features, pd.DataFrame)
     assert len(features) == 1
@@ -17,7 +17,7 @@ def test_build_ai_features_returns_one_row(all_tfs):
 def test_build_ai_features_does_not_mutate_input(all_tfs):
     before = {tf: df.copy(deep=True) for tf, df in all_tfs.items()}
 
-    build_ai_features(all_tfs)
+    build_ai_features(all_tfs)  # noqa: F841 — return value intentionally ignored
 
     for tf, df in all_tfs.items():
         pd.testing.assert_frame_equal(df, before[tf])
@@ -26,7 +26,7 @@ def test_build_ai_features_does_not_mutate_input(all_tfs):
 def test_build_ai_features_handles_short_dfs(short_df):
     tfs = {tf: short_df.copy() for tf in ("W1", "D1", "H4", "H1", "M15")}
 
-    features = build_ai_features(tfs)
+    features, _ = build_ai_features(tfs)
 
     assert len(features) == 1
     assert set(REQUIRED_AI_FEATURES).issubset(features.columns)
@@ -40,7 +40,7 @@ def test_build_ai_features_handles_missing_optional_indicator_columns(uptrend_df
         for tf in ("W1", "D1", "H4", "H1", "M15")
     }
 
-    features = build_ai_features(tfs)
+    features, _ = build_ai_features(tfs)
 
     assert "rsi_h1" in features.columns
     assert "atr_h1" in features.columns
