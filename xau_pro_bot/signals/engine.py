@@ -38,6 +38,7 @@ class MasterSignalEngine:
                 model_id=str(ai_cfg["model_id"]),
                 model_type=str(ai_cfg["model_type"]),
                 cache_dir=str(ai_cfg["cache_dir"]),
+                revision=str(ai_cfg["revision"]),
             )
 
     @staticmethod
