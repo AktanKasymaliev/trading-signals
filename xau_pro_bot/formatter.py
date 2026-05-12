@@ -30,6 +30,16 @@ def _tp2_line(sig: dict) -> str:
     return f" •  TP2: `{_fmt_price(sig['tp2'])}` ({abs(diff):.1f} pts) — ликвидность"
 
 
+def _ai_line(sig: dict) -> str | None:
+    if not sig.get("ai_enabled"):
+        return None
+    direction = sig.get("ai_direction") or "NO_TRADE"
+    confidence = sig.get("ai_confidence")
+    reason = sig.get("ai_reason") or "AI checked"
+    conf_text = f"{float(confidence):.2f}" if confidence is not None else "0.00"
+    return f"AI: {direction} {conf_text} confidence — {reason}"
+
+
 def _direction_header(sig: dict) -> str:
     if sig["direction"] == "BUY":
         return "🟢 Сильный сигнал — BUY"
@@ -71,6 +81,9 @@ def format_strong_signal(sig: dict) -> str:
         parts.append(f"📐 Стратегия: {sig['strategy_label']}")
     if sig.get("horizon_label"):
         parts.append(f"⏳ Горизонт: {sig['horizon_label']}")
+    ai_line = _ai_line(sig)
+    if ai_line:
+        parts.append(ai_line)
     parts.extend([
         "━━━━━━━━━━━━━━━━━━━",
         _analysis_block(sig),
@@ -96,6 +109,9 @@ def format_weak_signal(sig: dict) -> str:
         parts.append(f"📐 Стратегия: {sig['strategy_label']}")
     if sig.get("horizon_label"):
         parts.append(f"⏳ Горизонт: {sig['horizon_label']}")
+    ai_line = _ai_line(sig)
+    if ai_line:
+        parts.append(ai_line)
     return "\n".join(parts)
 
 
