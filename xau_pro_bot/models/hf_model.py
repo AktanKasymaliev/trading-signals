@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import logging
+import re
 from typing import Any
 
 import joblib
@@ -19,6 +20,11 @@ _SKLEARN_FILENAMES = (
     "classifier.joblib",
     "trading_model.joblib",
 )
+_COMMIT_SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
+
+
+def _is_commit_sha(revision: str | None) -> bool:
+    return bool(revision and _COMMIT_SHA_RE.fullmatch(revision))
 
 
 class HFTradingModel:
@@ -65,9 +71,10 @@ class HFTradingModel:
         return self._model
 
     def _load_sklearn(self) -> Any:
-        if not self.revision:
+        if not _is_commit_sha(self.revision):
             raise RuntimeError(
-                "sklearn/joblib models require a pinned revision for Hugging Face artifacts"
+                "sklearn/joblib models require a pinned 40-character commit SHA "
+                "for Hugging Face artifacts"
             )
 
         last_error: Exception | None = None
