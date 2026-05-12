@@ -79,6 +79,48 @@ STREAM_INTRADAY = "intraday"
 STREAM_SWING = "swing"
 STREAM_SCALP = "scalp"
 
+# ── Optional AI confirmation layer ────────────────────
+AI_ENABLED = os.getenv("AI_ENABLED", "false").strip().lower() in {
+    "1", "true", "yes", "on",
+}
+AI_MODEL_ID = os.getenv("AI_MODEL_ID", "")
+AI_MODEL_TYPE = os.getenv("AI_MODEL_TYPE", "sklearn")
+AI_MIN_CONFIDENCE = float(os.getenv("AI_MIN_CONFIDENCE", "0.65"))
+AI_STRONG_CONFIDENCE = float(os.getenv("AI_STRONG_CONFIDENCE", "0.75"))
+AI_NO_TRADE_THRESHOLD = float(os.getenv("AI_NO_TRADE_THRESHOLD", "0.60"))
+AI_SCORE_BONUS = int(os.getenv("AI_SCORE_BONUS", "8"))
+AI_STRONG_SCORE_BONUS = int(os.getenv("AI_STRONG_SCORE_BONUS", "12"))
+AI_CONFLICT_PENALTY = int(os.getenv("AI_CONFLICT_PENALTY", "10"))
+AI_CACHE_DIR = os.getenv("AI_CACHE_DIR", "./models_cache")
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    """Parse common env bool values."""
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def load_ai_config() -> dict[str, str | bool | float | int]:
+    """Return current AI config using live env values.
+
+    Tests mutate env after module import, so this function reads os.environ
+    directly instead of returning only module-import constants.
+    """
+    return {
+        "enabled": _env_bool("AI_ENABLED", False),
+        "model_id": os.getenv("AI_MODEL_ID", ""),
+        "model_type": os.getenv("AI_MODEL_TYPE", "sklearn"),
+        "min_confidence": float(os.getenv("AI_MIN_CONFIDENCE", "0.65")),
+        "strong_confidence": float(os.getenv("AI_STRONG_CONFIDENCE", "0.75")),
+        "no_trade_threshold": float(os.getenv("AI_NO_TRADE_THRESHOLD", "0.60")),
+        "score_bonus": int(os.getenv("AI_SCORE_BONUS", "8")),
+        "strong_score_bonus": int(os.getenv("AI_STRONG_SCORE_BONUS", "12")),
+        "conflict_penalty": int(os.getenv("AI_CONFLICT_PENALTY", "10")),
+        "cache_dir": os.getenv("AI_CACHE_DIR", "./models_cache"),
+    }
+
 
 def load_env(required: Iterable[str]) -> dict[str, str]:
     """Load and validate required environment variables."""

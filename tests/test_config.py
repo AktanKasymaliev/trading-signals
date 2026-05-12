@@ -33,3 +33,65 @@ def test_load_env_returns_dict(monkeypatch):
     env = config.load_env(required=["TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "TWELVE_DATA_API_KEY"])
     assert env["TELEGRAM_BOT_TOKEN"] == "abc"
     assert env["TELEGRAM_CHAT_ID"] == "123"
+
+
+def test_ai_defaults_disabled(monkeypatch):
+    monkeypatch.delenv("AI_ENABLED", raising=False)
+    monkeypatch.delenv("AI_MODEL_ID", raising=False)
+    monkeypatch.delenv("AI_MODEL_TYPE", raising=False)
+    monkeypatch.delenv("AI_MIN_CONFIDENCE", raising=False)
+    monkeypatch.delenv("AI_STRONG_CONFIDENCE", raising=False)
+    monkeypatch.delenv("AI_NO_TRADE_THRESHOLD", raising=False)
+    monkeypatch.delenv("AI_SCORE_BONUS", raising=False)
+    monkeypatch.delenv("AI_STRONG_SCORE_BONUS", raising=False)
+    monkeypatch.delenv("AI_CONFLICT_PENALTY", raising=False)
+    monkeypatch.delenv("AI_CACHE_DIR", raising=False)
+
+    cfg = config.load_ai_config()
+
+    assert cfg["enabled"] is False
+    assert cfg["model_id"] == ""
+    assert cfg["model_type"] == "sklearn"
+    assert cfg["min_confidence"] == 0.65
+    assert cfg["strong_confidence"] == 0.75
+    assert cfg["no_trade_threshold"] == 0.60
+    assert cfg["score_bonus"] == 8
+    assert cfg["strong_score_bonus"] == 12
+    assert cfg["conflict_penalty"] == 10
+    assert cfg["cache_dir"] == "./models_cache"
+
+
+def test_ai_env_overrides(monkeypatch):
+    monkeypatch.setenv("AI_ENABLED", "true")
+    monkeypatch.setenv("AI_MODEL_ID", "owner/xau-model")
+    monkeypatch.setenv("AI_MODEL_TYPE", "transformers")
+    monkeypatch.setenv("AI_MIN_CONFIDENCE", "0.7")
+    monkeypatch.setenv("AI_STRONG_CONFIDENCE", "0.82")
+    monkeypatch.setenv("AI_NO_TRADE_THRESHOLD", "0.64")
+    monkeypatch.setenv("AI_SCORE_BONUS", "9")
+    monkeypatch.setenv("AI_STRONG_SCORE_BONUS", "14")
+    monkeypatch.setenv("AI_CONFLICT_PENALTY", "11")
+    monkeypatch.setenv("AI_CACHE_DIR", "/tmp/hf-cache")
+
+    cfg = config.load_ai_config()
+
+    assert cfg["enabled"] is True
+    assert cfg["model_id"] == "owner/xau-model"
+    assert cfg["model_type"] == "transformers"
+    assert cfg["min_confidence"] == 0.7
+    assert cfg["strong_confidence"] == 0.82
+    assert cfg["no_trade_threshold"] == 0.64
+    assert cfg["score_bonus"] == 9
+    assert cfg["strong_score_bonus"] == 14
+    assert cfg["conflict_penalty"] == 11
+    assert cfg["cache_dir"] == "/tmp/hf-cache"
+
+
+def test_bool_parser_accepts_common_values(monkeypatch):
+    for value in ("1", "true", "TRUE", "yes", "on"):
+        monkeypatch.setenv("AI_ENABLED", value)
+        assert config.load_ai_config()["enabled"] is True
+
+    for value in ("0", "false", "FALSE", "no", "off", ""):
+        monkeypatch.setenv("AI_ENABLED", value)
+        assert config.load_ai_config()["enabled"] is False
