@@ -83,15 +83,15 @@ STREAM_SCALP = "scalp"
 AI_ENABLED = os.getenv("AI_ENABLED", "false").strip().lower() in {
     "1", "true", "yes", "on",
 }
-AI_MODEL_ID = os.getenv("AI_MODEL_ID", "")
-AI_MODEL_TYPE = os.getenv("AI_MODEL_TYPE", "sklearn")
-AI_MIN_CONFIDENCE = float(os.getenv("AI_MIN_CONFIDENCE", "0.65"))
-AI_STRONG_CONFIDENCE = float(os.getenv("AI_STRONG_CONFIDENCE", "0.75"))
-AI_NO_TRADE_THRESHOLD = float(os.getenv("AI_NO_TRADE_THRESHOLD", "0.60"))
-AI_SCORE_BONUS = int(os.getenv("AI_SCORE_BONUS", "8"))
-AI_STRONG_SCORE_BONUS = int(os.getenv("AI_STRONG_SCORE_BONUS", "12"))
-AI_CONFLICT_PENALTY = int(os.getenv("AI_CONFLICT_PENALTY", "10"))
-AI_CACHE_DIR = os.getenv("AI_CACHE_DIR", "./models_cache")
+AI_MODEL_ID = ""
+AI_MODEL_TYPE = "sklearn"
+AI_MIN_CONFIDENCE = 0.65
+AI_STRONG_CONFIDENCE = 0.75
+AI_NO_TRADE_THRESHOLD = 0.60
+AI_SCORE_BONUS = 8
+AI_STRONG_SCORE_BONUS = 12
+AI_CONFLICT_PENALTY = 10
+AI_CACHE_DIR = "./models_cache"
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -100,6 +100,26 @@ def _env_bool(name: str, default: bool = False) -> bool:
     if raw is None:
         return default
     return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return float(raw)
+    except ValueError as exc:
+        raise RuntimeError(f"Invalid float env var {name}: {raw!r}") from exc
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except ValueError as exc:
+        raise RuntimeError(f"Invalid int env var {name}: {raw!r}") from exc
 
 
 def load_ai_config() -> dict[str, str | bool | float | int]:
@@ -112,12 +132,12 @@ def load_ai_config() -> dict[str, str | bool | float | int]:
         "enabled": _env_bool("AI_ENABLED", False),
         "model_id": os.getenv("AI_MODEL_ID", ""),
         "model_type": os.getenv("AI_MODEL_TYPE", "sklearn"),
-        "min_confidence": float(os.getenv("AI_MIN_CONFIDENCE", "0.65")),
-        "strong_confidence": float(os.getenv("AI_STRONG_CONFIDENCE", "0.75")),
-        "no_trade_threshold": float(os.getenv("AI_NO_TRADE_THRESHOLD", "0.60")),
-        "score_bonus": int(os.getenv("AI_SCORE_BONUS", "8")),
-        "strong_score_bonus": int(os.getenv("AI_STRONG_SCORE_BONUS", "12")),
-        "conflict_penalty": int(os.getenv("AI_CONFLICT_PENALTY", "10")),
+        "min_confidence": _env_float("AI_MIN_CONFIDENCE", 0.65),
+        "strong_confidence": _env_float("AI_STRONG_CONFIDENCE", 0.75),
+        "no_trade_threshold": _env_float("AI_NO_TRADE_THRESHOLD", 0.60),
+        "score_bonus": _env_int("AI_SCORE_BONUS", 8),
+        "strong_score_bonus": _env_int("AI_STRONG_SCORE_BONUS", 12),
+        "conflict_penalty": _env_int("AI_CONFLICT_PENALTY", 10),
         "cache_dir": os.getenv("AI_CACHE_DIR", "./models_cache"),
     }
 

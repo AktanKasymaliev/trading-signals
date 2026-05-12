@@ -1,3 +1,5 @@
+import importlib
+
 import pytest
 
 from xau_pro_bot import config
@@ -95,3 +97,20 @@ def test_bool_parser_accepts_common_values(monkeypatch):
     for value in ("0", "false", "FALSE", "no", "off", ""):
         monkeypatch.setenv("AI_ENABLED", value)
         assert config.load_ai_config()["enabled"] is False
+
+
+def test_import_ignores_malformed_disabled_ai_numeric_env(monkeypatch):
+    monkeypatch.setenv("AI_ENABLED", "false")
+    monkeypatch.setenv("AI_MIN_CONFIDENCE", "abc")
+
+    reloaded = importlib.reload(config)
+
+    assert reloaded.AI_ENABLED is False
+    assert reloaded.AI_MIN_CONFIDENCE == 0.65
+
+
+def test_load_ai_config_reports_malformed_numeric_env(monkeypatch):
+    monkeypatch.setenv("AI_MIN_CONFIDENCE", "abc")
+
+    with pytest.raises(RuntimeError, match="AI_MIN_CONFIDENCE"):
+        config.load_ai_config()
