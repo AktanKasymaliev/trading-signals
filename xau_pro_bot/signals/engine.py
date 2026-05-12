@@ -14,6 +14,9 @@ from xau_pro_bot.indicators.ict import (
     find_fvg, find_order_blocks, find_liquidity, get_killzone,
 )
 from xau_pro_bot.indicators.sr_zones import find_sr_zones
+from xau_pro_bot.models.calibration import ai_prediction_to_adjustment
+from xau_pro_bot.models.features import build_ai_features
+from xau_pro_bot.models.hf_model import HFTradingModel
 from xau_pro_bot.signals.ict_signals import score_ict
 from xau_pro_bot.signals.smc_signals import score_smc
 from xau_pro_bot.signals.classic_signals import score_classic
@@ -21,6 +24,21 @@ from xau_pro_bot.signals.classic_signals import score_classic
 
 class MasterSignalEngine:
     """Aggregates all scoring layers and produces a structured signal."""
+
+    def __init__(
+        self,
+        ai_enabled: bool | None = None,
+        ai_model: Any | None = None,
+    ) -> None:
+        ai_cfg = config.load_ai_config()
+        self.ai_enabled = bool(ai_cfg["enabled"] if ai_enabled is None else ai_enabled)
+        self.ai_model = ai_model
+        if self.ai_enabled and self.ai_model is None:
+            self.ai_model = HFTradingModel(
+                model_id=str(ai_cfg["model_id"]),
+                model_type=str(ai_cfg["model_type"]),
+                cache_dir=str(ai_cfg["cache_dir"]),
+            )
 
     @staticmethod
     def _tier(score: float) -> str:
@@ -76,6 +94,42 @@ class MasterSignalEngine:
         if direction == "SELL" and d1_bull:
             return 20.0, "D1 trend against SELL"
         return 0.0, None
+
+    def _disabled_ai_fields(self) -> dict[str, Any]:
+        return {
+            "ai_enabled": False,
+            "ai_direction": None,
+            "ai_confidence": None,
+            "ai_reason": None,
+            "ai_blocked": False,
+            "ai_score_delta_buy": 0,
+            "ai_score_delta_sell": 0,
+        }
+
+    def _run_ai_adjustment(
+        self,
+        data: dict[str, pd.DataFrame],
+        deterministic_direction: str,
+    ) -> dict[str, Any]:
+        if not self.ai_enabled:
+            return self._disabled_ai_fields()
+
+        if self.ai_model is None:
+            prediction = {"direction": "NO_TRADE", "confidence": 0.0}
+        else:
+            features = build_ai_features(data)
+            prediction = self.ai_model.predict(features)
+
+        adjustment = ai_prediction_to_adjustment(prediction, deterministic_direction)
+        return {
+            "ai_enabled": True,
+            "ai_direction": adjustment["ai_direction"],
+            "ai_confidence": adjustment["ai_confidence"],
+            "ai_reason": adjustment["reason"],
+            "ai_blocked": adjustment["block_signal"],
+            "ai_score_delta_buy": adjustment["score_delta_buy"],
+            "ai_score_delta_sell": adjustment["score_delta_sell"],
+        }
 
     def _compute_levels(self, direction: str, h1_df, m15_df, d1_df) -> dict[str, Any]:
         entry = float(m15_df["Close"].iloc[-1])
@@ -179,9 +233,6 @@ class MasterSignalEngine:
         else:
             bear_score -= macro_pen
 
-        final_score = max(bull_score, bear_score)
-        tier = self._tier(final_score)
-
         reasons = {
             "macro": macro_reasons,
             "smc": smc_reasons,
@@ -189,6 +240,15 @@ class MasterSignalEngine:
             "classic": cls_reasons,
             "penalties": [pen_reason] if pen_reason else [],
         }
+
+        ai_fields = self._run_ai_adjustment(data, direction)
+        bull_score += ai_fields["ai_score_delta_buy"]
+        bear_score += ai_fields["ai_score_delta_sell"]
+        if ai_fields["ai_reason"]:
+            reasons["ai"] = [ai_fields["ai_reason"]]
+
+        final_score = max(bull_score, bear_score)
+        tier = "NO_SIGNAL" if ai_fields["ai_blocked"] else self._tier(final_score)
 
         if tier == "NO_SIGNAL":
             return {
@@ -202,6 +262,7 @@ class MasterSignalEngine:
                 "reasons": reasons,
                 "tp2_unavailable": False,
                 "ts_utc": datetime.now(timezone.utc),
+                **ai_fields,
             }
 
         levels = self._compute_levels(direction, h1, m15, d1)
@@ -213,4 +274,5 @@ class MasterSignalEngine:
             "killzone": get_killzone(),
             "reasons": reasons,
             "ts_utc": datetime.now(timezone.utc),
+            **ai_fields,
         }
