@@ -98,8 +98,11 @@ def train_directional(df: pd.DataFrame, *, variant: Literal["A1", "A2"]):
     return model, m
 
 
-def train_filter(df: pd.DataFrame):
+def train_filter(df: pd.DataFrame, *, policy: str = "tp1_unresolved_bad"):
+    from xau_pro_bot.models.label_policy import apply_label_policy
     data = df[df["baseline_sample"]].dropna(subset=["label_filter"])
+    if policy != "tp1_unresolved_bad":
+        data = apply_label_policy(data, policy)
     tr, va, te = split_time_70_15_15(data)
     fcols = _feature_cols(data)
     X_tr, y_tr = tr[fcols], tr["label_filter"].astype(int)

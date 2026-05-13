@@ -17,6 +17,7 @@ import numpy as np
 import pandas as pd
 
 from xau_pro_bot.models.features import build_ai_features
+from xau_pro_bot.models.label_policy import apply_label_policy
 from xau_pro_bot.models.trade_outcome import (
     OutcomeClass,
     resolve_outcome_m15,
@@ -38,6 +39,7 @@ class HarvestConfig:
     synth_rr: float = 2.0
     min_lookback_h1: int = 250
     dedup_tol: float = 0.5
+    label_policy: str = "tp1_unresolved_bad"
 
 
 _KILLZONES = ("Asian KZ", "London KZ", "NY AM KZ", "NY PM KZ", "OFF")
@@ -272,4 +274,6 @@ def harvest_path_d_samples(history: dict[str, pd.DataFrame],
     if cfg.step_m15 > 0:
         from xau_pro_bot.models.dedup import dedup_near_identical
         df = dedup_near_identical(df, tol=cfg.dedup_tol)
+    if cfg.label_policy != "tp1_unresolved_bad":
+        df = apply_label_policy(df, cfg.label_policy)
     return df

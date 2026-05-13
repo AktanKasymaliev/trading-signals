@@ -75,3 +75,14 @@ def test_zero_risk_raises():
     with pytest.raises(ValueError):
         resolve_outcome_m15(100.0, 100.0, 102.0, "BUY",
                             _bars([[100.0, 101.0, 99.0, 100.5]]), 192)
+
+
+def test_same_candle_conflict_is_sl_first():
+    out = resolve_outcome_m15(
+        entry=1900, sl=1898, tp=1902, direction="BUY",
+        m15_future=pd.DataFrame(
+            {"Open": [1900], "High": [1903], "Low": [1897], "Close": [1899]},
+            index=pd.to_datetime(["2024-01-01"], utc=True)),
+    )
+    assert out.outcome_class.name == "SAME_CANDLE_SL_FIRST"
+    assert out.final_R == -1.0
