@@ -161,3 +161,42 @@ Then rerun Task AI-5 spec and code-quality review gates before moving to AI-6.
 - Continue from AI-5 code-quality review fixes above.
 - AI-6, AI-7, AI-8, and AI-9 are not started.
 - Remember that Task AI-4 added a stricter security requirement than the original AI plan: sklearn/joblib Hugging Face artifacts require a pinned 40-character commit SHA revision.
+
+---
+
+## PoC: SMC v2 (2026-05-13)
+
+**Plan:** `docs/superpowers/plans/2026-05-12-poc-smc-v2-integration.md`
+**Model:** `JonusNattapong/xauusd-trading-ai-smc-v2` @ `d1ee87d058bf714af1b6f4b3979646dd0024b726`, file `trading_model_15m.pkl` (XGBClassifier, binary BUY/NOT-BUY, 21 features).
+
+**Infrastructure: ✅ WORKS end-to-end.**
+- Model downloads with pinned SHA.
+- Custom filename loaded via `AI_MODEL_FILENAME`.
+- `smc_v2` feature builder (21 features in correct order, LabelEncoder `bearish=0/bullish=1/none=2`) verified against `model.feature_names_in_`.
+- XGBoost `predict_proba` returns valid `{BUY, NO_TRADE}` distribution.
+- Calibration → engine → backtest pipeline functional. Smoke test produced a SELL/BUY conflict with `score_delta_sell=-10` as expected.
+
+**Comparison run (2025-07-21 → 2025-09-18, 956 H1 bars):**
+- Baseline: **0 signals** (all NO_SIGNAL, scores -20..+12, median -6, all below WEAK threshold 40).
+- AI run: **0 signals + 84 AI blocks** (NO_TRADE confidence ≥ 0.60 on 84 candidate setups).
+
+**Findings:**
+1. **Baseline calibration issue (separate from AI).** Macro penalties (D1 trend against = -20) + scoring weights produce scores far below tier thresholds for this XAU/USD window. Recalibrating WEAK/NORMAL/STRONG cutoffs (or relaxing macro penalty) needed before any AI evaluation is meaningful.
+2. **AI is BUY-only and trigger-happy on NO_TRADE.** 84 blocks in 2 months ≈ 1.5/day. Suggests either (a) the model genuinely says "don't trade" most of the time, or (b) our feature-builder approximations (FVG/OB heuristics, raw prices vs trained on different scale) push the model toward defensive `NO_TRADE`. Trees ARE scale-robust (verified: scaled vs raw predictions <2.5% delta on training data), so likely (a).
+3. **README of the HF model was wrong:** claimed 23 features incl. Volume + Recovery_Type; actual contract is 21 features without them. Always trust `feature_names_in_` over docs.
+
+**Conclusion for Path C decision:**
+Infrastructure validation complete — AI layer cleanly plugs in. The ceiling on a comparison-based assessment is now limited by baseline calibration, not by the AI seam. Pivot recommendations:
+- Before training our own LightGBM (Path C), fix baseline calibration so we have a non-zero comparison baseline.
+- When training, use OUR feature builder (29 deterministic features) + walk-forward labeling from existing backtester to keep methodology in-domain.
+
+**Files added by PoC:**
+- `xau_pro_bot/models/smc_v2_features.py`
+- `tests/test_smc_v2_features.py`
+- `tests/test_ai_model_filename.py`
+- `tests/test_ai_feature_set.py`
+- `scripts/poc_smc_v2_smoke.py`
+- `scripts/poc_smc_v2_compare.py`
+- `data_xauusd_15m.csv`, `data_xauusd_h1.csv`, `data_xauusd_m15.csv` (gitignored — model training data, ~1MB total)
+
+**Commits:** `44a16fa` → `da9977c` → `1aefcfb` → `d93774e` → `29a62e7` → `ff3c3bd`.
