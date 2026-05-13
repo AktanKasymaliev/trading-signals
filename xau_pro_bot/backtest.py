@@ -135,7 +135,9 @@ def run_backtest(history: dict[str, pd.DataFrame],
                  ai_model_type: str = "sklearn",
                  ai_model_revision: str = "",
                  filter_model: Any | None = None,
-                 hybrid_thresholds: Any | None = None) -> BacktestResult:
+                 hybrid_thresholds: Any | None = None,
+                 walk_from: pd.Timestamp | None = None,
+                 walk_to: pd.Timestamp | None = None) -> BacktestResult:
     analyzer = _build_analyzer(
         stream=stream,
         use_ai=use_ai,
@@ -153,6 +155,10 @@ def run_backtest(history: dict[str, pd.DataFrame],
 
     for i in range(250, len(h1) - timeout_bars, step):
         cutoff = h1.index[i]
+        if walk_from is not None and cutoff < walk_from:
+            continue
+        if walk_to is not None and cutoff >= walk_to:
+            continue
         slice_data: dict[str, pd.DataFrame] = {}
         for tf, df in history.items():
             slice_data[tf] = df.loc[:cutoff].tail(720)
@@ -200,13 +206,17 @@ def compare_backtests(history: dict[str, pd.DataFrame],
                       ai_model_type: str = "sklearn",
                       ai_model_revision: str = "",
                       filter_model: Any | None = None,
-                      hybrid_thresholds: Any | None = None) -> dict[str, Any]:
+                      hybrid_thresholds: Any | None = None,
+                      walk_from: pd.Timestamp | None = None,
+                      walk_to: pd.Timestamp | None = None) -> dict[str, Any]:
     baseline = run_backtest(
         history=history,
         timeout_bars=timeout_bars,
         step=step,
         stream=stream,
         use_ai=False,
+        walk_from=walk_from,
+        walk_to=walk_to,
     )
     ai = run_backtest(
         history=history,
@@ -220,6 +230,8 @@ def compare_backtests(history: dict[str, pd.DataFrame],
         ai_model_revision=ai_model_revision,
         filter_model=filter_model,
         hybrid_thresholds=hybrid_thresholds,
+        walk_from=walk_from,
+        walk_to=walk_to,
     )
     return {
         "baseline": baseline,

@@ -52,9 +52,6 @@ def _load(csv: Path) -> dict[str, pd.DataFrame]:
     }
 
 
-def _slice_history(history, start, end):
-    return {tf: df.loc[start:end] for tf, df in history.items()}
-
 
 def _result_summary(r: BacktestResult) -> dict:
     return {
@@ -92,38 +89,21 @@ def pick_best_threshold(sweep: dict[float, dict], min_kept: int) -> float | None
                   reverse=True)[0][0]
 
 
-def _threshold_sweep(history_val, filter_path: str, min_kept: int,
-                     base_kwargs: dict) -> tuple[dict, float | None]:
-    sweep: dict[float, dict] = {}
-    for t in THRESHOLDS:
-        flt = TradeFilterModel(local_path=filter_path, threshold=float(t))
-        r = run_backtest(history_val, filter_model=flt, **base_kwargs)
-        sweep[t] = {
-            "pf": float(r.profit_factor),
-            "expectancy": float(r.expectancy),
-            "wr": float(r.win_rate),
-            "kept": int(r.signals_generated),
-            "blocked": int(r.blocked_signals),
-        }
-    chosen = pick_best_threshold(sweep, min_kept=min_kept)
-    return sweep, chosen
-
 
 def run_all_modes(history, *, path_c_local: str | None,
                   path_d_filter: str | None,
                   val_split=(0.70, 0.85)) -> dict:
-    n = len(history["H1"])
-    t_tr = history["H1"].index[int(n * val_split[0])]
-    t_te = history["H1"].index[int(n * val_split[1])]
-    val_hist = _slice_history(history, t_tr, t_te)
-    test_hist = _slice_history(history, t_te, history["H1"].index[-1])
+    h1 = history["H1"]
+    n = len(h1)
+    t_val = h1.index[int(n * val_split[0])]
+    t_test = h1.index[int(n * val_split[1])]
 
     base_kwargs = dict(timeout_bars=48, step=4, stream="intraday")
 
     results: dict = {}
 
-    # A baseline only
-    a = run_backtest(test_hist, **base_kwargs)
+    # A baseline on the test window (full history given, walk_from filters)
+    a = run_backtest(history, walk_from=t_test, **base_kwargs)
     results["A_baseline"] = _result_summary(a)
 
     # H/I/J non-AI tier filters
@@ -134,37 +114,48 @@ def run_all_modes(history, *, path_c_local: str | None,
     # B Path C
     if path_c_local and Path(path_c_local).exists():
         ai = HFTradingModel(model_id="", model_type="sklearn", local_path=path_c_local)
-        b = run_backtest(test_hist, ai_model=ai, use_ai=True, **base_kwargs)
+        b = run_backtest(history, ai_model=ai, use_ai=True,
+                         walk_from=t_test, **base_kwargs)
         results["B_path_c"] = _result_summary(b)
 
-    # E Path D filter — pick threshold on val
+    # E Path D filter — pick threshold on validation window only
     chosen_threshold = None
     sweep: dict = {}
     if path_d_filter and Path(path_d_filter).exists():
         min_kept = max(1, int(a.signals_generated * 0.25))
-        sweep, chosen_threshold = _threshold_sweep(val_hist, path_d_filter,
-                                                    min_kept=min_kept,
-                                                    base_kwargs=base_kwargs)
+        sweep = {}
+        for t in THRESHOLDS:
+            flt = TradeFilterModel(local_path=path_d_filter, threshold=float(t))
+            r = run_backtest(history, filter_model=flt,
+                             walk_from=t_val, walk_to=t_test, **base_kwargs)
+            sweep[t] = {
+                "pf": float(r.profit_factor),
+                "expectancy": float(r.expectancy),
+                "wr": float(r.win_rate),
+                "kept": int(r.signals_generated),
+                "blocked": int(r.blocked_signals),
+            }
+        chosen_threshold = pick_best_threshold(sweep, min_kept=min_kept)
         if chosen_threshold is not None:
             flt = TradeFilterModel(local_path=path_d_filter,
-                                    threshold=float(chosen_threshold))
-            e = run_backtest(test_hist, filter_model=flt, **base_kwargs)
+                                   threshold=float(chosen_threshold))
+            e = run_backtest(history, filter_model=flt,
+                             walk_from=t_test, **base_kwargs)
             results["E_path_d_filter"] = _result_summary(e)
 
             thr = HybridThresholds(weak=0.70, normal=float(chosen_threshold),
-                                    strong_block=0.80)
-            f = run_backtest(test_hist, filter_model=flt,
-                              hybrid_thresholds=thr, **base_kwargs)
+                                   strong_block=0.80)
+            f = run_backtest(history, filter_model=flt,
+                             hybrid_thresholds=thr,
+                             walk_from=t_test, **base_kwargs)
             results["F_hybrid"] = _result_summary(f)
 
     return {
         "results": results,
         "threshold_sweep": sweep,
         "chosen_threshold": chosen_threshold,
-        "test_window": (str(test_hist["H1"].index.min()),
-                         str(test_hist["H1"].index.max())),
-        "val_window":  (str(val_hist["H1"].index.min()),
-                         str(val_hist["H1"].index.max())),
+        "test_window": (str(t_test), str(h1.index[-1])),
+        "val_window":  (str(t_val), str(t_test)),
     }
 
 
