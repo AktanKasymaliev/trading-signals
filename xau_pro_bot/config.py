@@ -143,6 +143,14 @@ def load_ai_config() -> dict[str, str | bool | float | int]:
         "model_filename": os.getenv("AI_MODEL_FILENAME", ""),
         "feature_set": os.getenv("AI_FEATURE_SET", "internal"),
         "local_path": os.getenv("AI_MODEL_LOCAL_PATH", ""),
+        "path_d_filter_path": os.getenv("AI_PATH_D_FILTER_PATH", ""),
+        "path_d_directional_path": os.getenv("AI_PATH_D_DIRECTIONAL_PATH", ""),
+        "hybrid_mode": os.getenv("AI_HYBRID_MODE", "off"),
+        "filter_threshold_weak":   _env_float("AI_FILTER_THRESHOLD_WEAK", 0.70),
+        "filter_threshold_normal": _env_float("AI_FILTER_THRESHOLD_NORMAL", 0.55),
+        "filter_threshold_strong_block": _env_float("AI_FILTER_THRESHOLD_STRONG_BLOCK", 0.80),
+        "filter_unresolved_policy": os.getenv("FILTER_UNRESOLVED_POLICY", "bad"),
+        "label_tp_target": os.getenv("LABEL_TP_TARGET", "tp1"),
     }
 
 

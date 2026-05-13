@@ -18,6 +18,9 @@ from xau_pro_bot.models.calibration import ai_prediction_to_adjustment
 from xau_pro_bot.models.features import build_ai_features
 from xau_pro_bot.models.smc_v2_features import build_smc_v2_features
 from xau_pro_bot.models.hf_model import HFTradingModel
+from xau_pro_bot.signals.hybrid_policy import (
+    HybridDecision, HybridThresholds, decide as hybrid_decide,
+)
 from xau_pro_bot.signals.ict_signals import score_ict
 from xau_pro_bot.signals.smc_signals import score_smc
 from xau_pro_bot.signals.classic_signals import score_classic
@@ -30,6 +33,8 @@ class MasterSignalEngine:
         self,
         ai_enabled: bool | None = None,
         ai_model: Any | None = None,
+        filter_model: Any | None = None,
+        hybrid_thresholds: HybridThresholds | None = None,
     ) -> None:
         # HFTradingModel is created once per engine instance. The adapter lazy-loads
         # the underlying model on first predict() and caches it, so subsequent
@@ -47,6 +52,8 @@ class MasterSignalEngine:
                 filename=str(ai_cfg["model_filename"]),
                 local_path=str(ai_cfg["local_path"]),
             )
+        self.filter_model = filter_model
+        self.hybrid_thresholds = hybrid_thresholds or HybridThresholds()
 
     @staticmethod
     def _tier(score: float) -> str:
@@ -273,6 +280,24 @@ class MasterSignalEngine:
 
         final_score = max(bull_score, bear_score)
         tier = "NO_SIGNAL" if ai_fields["ai_blocked"] else self._tier(final_score)
+
+        # Path D filter/hybrid gate (opt-in)
+        if self.filter_model is not None and tier != "NO_SIGNAL":
+            try:
+                feats_29, _complete = build_ai_features(data)
+            except Exception:
+                feats_29 = pd.DataFrame([{}])
+            filter_pred = self.filter_model.predict(feats_29)
+            d = hybrid_decide(tier=tier, baseline_dir=direction,
+                              ai_directional=None,
+                              ai_filter=filter_pred,
+                              thresholds=self.hybrid_thresholds)
+            if d == HybridDecision.BLOCK:
+                tier = "NO_SIGNAL"
+                ai_fields = dict(ai_fields)
+                ai_fields["ai_blocked"] = True
+                ai_fields["ai_reason"] = (ai_fields.get("ai_reason") or
+                                           f"path_d_filter:{filter_pred.get('decision')}")
 
         if tier == "NO_SIGNAL":
             return {
