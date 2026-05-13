@@ -105,11 +105,13 @@ def _build_analyzer(stream: str, use_ai: bool = False,
                     ai_model: Any | None = None,
                     ai_model_id: str = "",
                     ai_model_type: str = "sklearn",
-                    ai_model_revision: str = ""):
+                    ai_model_revision: str = "",
+                    filter_model: Any | None = None,
+                    hybrid_thresholds: Any | None = None):
     router = StreamRouter()
     if stream not in router.analyzers:
         raise ValueError(f"Unknown stream: {stream}")
-    if stream != "intraday" or not use_ai:
+    if stream != "intraday" or (not use_ai and filter_model is None):
         return router.analyzers[stream]
     model = ai_model
     if model is None and ai_model_id:
@@ -118,7 +120,9 @@ def _build_analyzer(stream: str, use_ai: bool = False,
             model_type=ai_model_type,
             revision=ai_model_revision,
         )
-    return MasterSignalEngine(ai_enabled=True, ai_model=model)
+    return MasterSignalEngine(ai_enabled=use_ai, ai_model=model,
+                              filter_model=filter_model,
+                              hybrid_thresholds=hybrid_thresholds)
 
 
 def run_backtest(history: dict[str, pd.DataFrame],
@@ -129,7 +133,9 @@ def run_backtest(history: dict[str, pd.DataFrame],
                  ai_model: Any | None = None,
                  ai_model_id: str = "",
                  ai_model_type: str = "sklearn",
-                 ai_model_revision: str = "") -> BacktestResult:
+                 ai_model_revision: str = "",
+                 filter_model: Any | None = None,
+                 hybrid_thresholds: Any | None = None) -> BacktestResult:
     analyzer = _build_analyzer(
         stream=stream,
         use_ai=use_ai,
@@ -137,6 +143,8 @@ def run_backtest(history: dict[str, pd.DataFrame],
         ai_model_id=ai_model_id,
         ai_model_type=ai_model_type,
         ai_model_revision=ai_model_revision,
+        filter_model=filter_model,
+        hybrid_thresholds=hybrid_thresholds,
     )
     res = BacktestResult()
     h1 = history["H1"]
@@ -190,7 +198,9 @@ def compare_backtests(history: dict[str, pd.DataFrame],
                       ai_model: Any | None = None,
                       ai_model_id: str = "",
                       ai_model_type: str = "sklearn",
-                      ai_model_revision: str = "") -> dict[str, Any]:
+                      ai_model_revision: str = "",
+                      filter_model: Any | None = None,
+                      hybrid_thresholds: Any | None = None) -> dict[str, Any]:
     baseline = run_backtest(
         history=history,
         timeout_bars=timeout_bars,
@@ -208,6 +218,8 @@ def compare_backtests(history: dict[str, pd.DataFrame],
         ai_model_id=ai_model_id,
         ai_model_type=ai_model_type,
         ai_model_revision=ai_model_revision,
+        filter_model=filter_model,
+        hybrid_thresholds=hybrid_thresholds,
     )
     return {
         "baseline": baseline,
