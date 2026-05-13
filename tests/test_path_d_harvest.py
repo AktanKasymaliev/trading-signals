@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import numpy as np
-import pandas as pd
 import pytest
 
 from xau_pro_bot.models.path_d_harvest import (
@@ -9,26 +7,6 @@ from xau_pro_bot.models.path_d_harvest import (
     harvest_path_d_samples,
 )
 
-
-@pytest.fixture
-def long_history():
-    rng = np.random.default_rng(7)
-    n = 4000
-    base = 2000.0 + np.cumsum(rng.normal(0, 1.0, n))
-    m15 = pd.DataFrame({
-        "Open": base, "High": base + 2, "Low": base - 2,
-        "Close": base + rng.normal(0, 0.3, n),
-        "Volume": rng.integers(100, 1000, n).astype(float),
-    }, index=pd.date_range("2026-01-01", periods=n, freq="15min", tz="UTC"))
-    agg = {"Open": "first", "High": "max", "Low": "min",
-           "Close": "last", "Volume": "sum"}
-    return {
-        "M15": m15,
-        "H1":  m15.resample("1h").agg(agg).dropna(),
-        "H4":  m15.resample("4h").agg(agg).dropna(),
-        "D1":  m15.resample("1D").agg(agg).dropna(),
-        "W1":  m15.resample("1W").agg(agg).dropna(),
-    }
 
 
 def test_harvest_baseline_only_emits_rows_with_outcome_metadata(long_history):
