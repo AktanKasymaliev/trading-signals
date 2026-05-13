@@ -200,3 +200,26 @@ Infrastructure validation complete — AI layer cleanly plugs in. The ceiling on
 - `data_xauusd_15m.csv`, `data_xauusd_h1.csv`, `data_xauusd_m15.csv` (gitignored — model training data, ~1MB total)
 
 **Commits:** `44a16fa` → `da9977c` → `1aefcfb` → `d93774e` → `29a62e7` → `ff3c3bd`.
+
+---
+
+## Path C: LightGBM (2026-05-13)
+
+Trained an in-house LightGBM 3-class classifier (BUY=1 / NO_TRADE=0 / SELL=-1) on our own 29 deterministic features over 80K M15 bars (2022-01 → 2025-09, XAU/USD), labeled by forward-return at h=16 bars (4h), threshold ±0.3%.
+
+**Training:** 9,925 samples → 7,940 train / 1,985 test (time-based 80/20). LightGBM with class_weight=balanced, early stopping at iter 184.
+
+**Holdout metrics:**
+- accuracy 65.2%, macro F1 0.53
+- Class -1: P 0.53 / R 0.34 / F1 0.41
+- Class  0: P 0.72 / R 0.81 / F1 0.76
+- Class  1: P 0.45 / R 0.41 / F1 0.43
+
+**Backtest comparison (full M15 history, step=12, timeout=48):**
+- BASE: sig=717 W/L=129/339 WR=27.6% E=-0.12R PF=0.74
+- AI  : sig=445 blocked=707 W/L=86/207 WR=29.4% E=-0.09R PF=0.81
+- DELTA: trades=-272 WR=+1.8% E=+0.03R PF=+0.07
+
+**Read:** AI lifts every metric modestly by filtering out 38% of baseline signals. Still unprofitable (PF<1) — baseline-calibration ceiling persists. Local-path infrastructure (`AI_MODEL_LOCAL_PATH`) wired in cleanly.
+
+**Files:** `xau_pro_bot/models/train_lightgbm.py`, `scripts/train_path_c_model.py`, `scripts/poc_path_c_compare.py`, `tests/test_train_lightgbm.py`, `tests/test_local_model_path.py`, `models_cache/path_c_lgb.joblib`.
