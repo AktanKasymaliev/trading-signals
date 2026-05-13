@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import pandas as pd
-import pytest
-
 from xau_pro_bot.models.path_d_harvest import HarvestConfig, harvest_path_d_samples
 
 
