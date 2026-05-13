@@ -16,6 +16,7 @@ from xau_pro_bot.indicators.ict import (
 from xau_pro_bot.indicators.sr_zones import find_sr_zones
 from xau_pro_bot.models.calibration import ai_prediction_to_adjustment
 from xau_pro_bot.models.features import build_ai_features
+from xau_pro_bot.models.smc_v2_features import build_smc_v2_features
 from xau_pro_bot.models.hf_model import HFTradingModel
 from xau_pro_bot.signals.ict_signals import score_ict
 from xau_pro_bot.signals.smc_signals import score_smc
@@ -35,6 +36,7 @@ class MasterSignalEngine:
         # analyze() calls on the same engine reuse the loaded model.
         ai_cfg = config.load_ai_config()
         self.ai_enabled = bool(ai_cfg["enabled"] if ai_enabled is None else ai_enabled)
+        self.ai_feature_set = str(ai_cfg.get("feature_set", "internal"))
         self.ai_model = ai_model
         if self.ai_enabled and self.ai_model is None:
             self.ai_model = HFTradingModel(
@@ -125,7 +127,10 @@ class MasterSignalEngine:
                 "confidence": 0.0,
             }
         else:
-            features, complete = build_ai_features(data)
+            if self.ai_feature_set == "smc_v2":
+                features, complete = build_smc_v2_features(data)
+            else:
+                features, complete = build_ai_features(data)
             if not complete:
                 return {
                     "ai_enabled": True,
