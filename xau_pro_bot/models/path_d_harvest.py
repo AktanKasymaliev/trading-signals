@@ -29,6 +29,7 @@ log = logging.getLogger(__name__)
 @dataclass(frozen=True)
 class HarvestConfig:
     step_h1: int = 4
+    step_m15: int = 0          # 0 disables M15 cutoff harvesting
     timeout_m15: int = 192
     label_tp_target: str = "tp1"
     include_synthetic: bool = False
@@ -36,6 +37,7 @@ class HarvestConfig:
     synth_atr_sl: float = 1.5
     synth_rr: float = 2.0
     min_lookback_h1: int = 250
+    dedup_tol: float = 0.5
 
 
 _KILLZONES = ("Asian KZ", "London KZ", "NY AM KZ", "NY PM KZ", "OFF")
@@ -206,7 +208,68 @@ def harvest_path_d_samples(history: dict[str, pd.DataFrame],
                     "cutoff": cutoff,
                 })
 
+    if cfg.step_m15 > 0:
+        # Iterate M15 timestamps that fall strictly between two H1 cutoffs we sampled.
+        h1_set = set(h1.index)
+        for j in range(0, len(m15) - 1, cfg.step_m15):
+            ts = m15.index[j]
+            if ts in h1_set:
+                continue
+            if ts < h1.index[cfg.min_lookback_h1]:
+                continue
+            slice_data = {tf: df.loc[:ts].tail(720) for tf, df in history.items()}
+            try:
+                sig = engine.analyze(slice_data)
+            except Exception:
+                continue
+            if sig is None:
+                continue
+            m15_future = m15.loc[m15.index > ts]
+            if len(m15_future) < 10:
+                break
+            try:
+                feats_29, complete = build_ai_features(slice_data)
+            except Exception:
+                continue
+            if not complete:
+                continue
+            feats_29_row = feats_29.iloc[0].to_dict()
+            base_ctx = _baseline_context_features(sig, slice_data["M15"], slice_data["H1"])
+            tier = sig.get("tier", "NO_SIGNAL")
+            tp = (sig.get("tp1") if cfg.label_tp_target == "tp1"
+                  else (sig.get("tp2") or sig.get("tp1")))
+            if tier in {"WEAK", "NORMAL", "STRONG"} and tp is not None and sig.get("sl") is not None:
+                try:
+                    out = resolve_outcome_m15(
+                        entry=float(sig["entry"]), sl=float(sig["sl"]),
+                        tp=float(tp), direction=str(sig["direction"]),
+                        m15_future=m15_future, timeout_bars=cfg.timeout_m15,
+                    )
+                except ValueError:
+                    continue
+                rows.append({
+                    **feats_29_row, **base_ctx,
+                    "is_synthetic": 0,
+                    "baseline_sample": True,
+                    "entry": float(sig["entry"]),
+                    "sl": float(sig["sl"]),
+                    "tp_used": float(tp),
+                    "direction": sig["direction"],
+                    "tier": tier,
+                    "outcome_class": out.outcome_class.value,
+                    "final_R": out.final_R,
+                    "mfe_R": out.mfe_R,
+                    "mae_R": out.mae_R,
+                    "bars_to_outcome": out.bars_to_outcome,
+                    "label_directional": _directional_label(sig["direction"], out.outcome_class),
+                    "label_filter": _filter_label(out.outcome_class),
+                    "cutoff": ts,
+                })
+
     if not rows:
         return pd.DataFrame()
     df = pd.DataFrame(rows).set_index("cutoff").sort_index()
+    if cfg.step_m15 > 0:
+        from xau_pro_bot.models.dedup import dedup_near_identical
+        df = dedup_near_identical(df, tol=cfg.dedup_tol)
     return df
