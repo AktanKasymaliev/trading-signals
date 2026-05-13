@@ -70,15 +70,18 @@ def _fit_lgb(X_tr, y_tr, X_va, y_va, params: dict):
 
 def _metrics(model, X_te, y_te) -> dict:
     from sklearn.metrics import (accuracy_score, classification_report,
-                                  precision_recall_fscore_support)
+                                  precision_recall_fscore_support,
+                                  confusion_matrix)
     pred = model.predict(X_te)
     acc = float(accuracy_score(y_te, pred))
     p, r, f, _ = precision_recall_fscore_support(y_te, pred, average="macro", zero_division=0)
+    cm = confusion_matrix(y_te, pred).tolist()
     return {
         "accuracy": acc,
         "precision_macro": float(p),
         "recall_macro": float(r),
         "f1_macro": float(f),
+        "confusion_matrix": cm,
         "report": classification_report(y_te, pred, zero_division=0),
     }
 
@@ -118,3 +121,26 @@ def train_filter(df: pd.DataFrame, *, policy: str = "tp1_unresolved_bad"):
 def save_model(model, feature_cols: list[str], path: str | Path) -> None:
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     joblib.dump({"model": model, "feature_cols": feature_cols}, path)
+
+
+def train_filter_calibrated(df: pd.DataFrame, *, policy: str = "tp1_unresolved_bad"):
+    from xau_pro_bot.models.calibrated_filter import (
+        CalibratedFilterWrapper, probability_distribution_stats,
+    )
+    from xau_pro_bot.models.label_policy import apply_label_policy
+
+    data = df[df["baseline_sample"]].dropna(subset=["label_filter"])
+    if policy != "tp1_unresolved_bad":
+        data = apply_label_policy(data, policy)
+    tr, va, te = split_time_70_15_15(data)
+    fcols = _feature_cols(data)
+    wrapper = CalibratedFilterWrapper().fit(tr[fcols], tr["label_filter"].astype(int))
+    m = _metrics(wrapper, te[fcols], te["label_filter"].astype(int))
+    good_te = wrapper.predict_proba(te[fcols])[:, 1]
+    m.update({
+        "n_train": len(tr), "n_val": len(va), "n_test": len(te),
+        "feature_cols": fcols,
+        "good_prob_stats_test": probability_distribution_stats(good_te),
+        "predicts_only_bad": bool((wrapper.predict(te[fcols]) == 0).all()),
+    })
+    return wrapper, m
