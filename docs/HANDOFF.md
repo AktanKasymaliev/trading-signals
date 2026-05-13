@@ -223,3 +223,47 @@ Trained an in-house LightGBM 3-class classifier (BUY=1 / NO_TRADE=0 / SELL=-1) o
 **Read:** AI lifts every metric modestly by filtering out 38% of baseline signals. Still unprofitable (PF<1) — baseline-calibration ceiling persists. Local-path infrastructure (`AI_MODEL_LOCAL_PATH`) wired in cleanly.
 
 **Files:** `xau_pro_bot/models/train_lightgbm.py`, `scripts/train_path_c_model.py`, `scripts/poc_path_c_compare.py`, `tests/test_train_lightgbm.py`, `tests/test_local_model_path.py`, `models_cache/path_c_lgb.joblib`.
+
+---
+
+## Path D: Trade Outcome LightGBM (2026-05-13)
+
+Built TP/SL outcome labeler, baseline-only sample harvester (with optional synthetic), 3-class Directional (A1/A2) + 2-class Filter trainers, `TradeFilterModel` adapter, `HybridPolicy`, opt-in engine seam, backtest `walk_from`/`walk_to` window controls, evaluator with 6 AI modes + 4 non-AI tier baselines + validation threshold sweep.
+
+**Training (full 80K M15 history, step_h1=4, timeout 192 M15):**
+- Harvested 1,595 samples (357 baseline + 1,238 synthetic).
+- Outcome distribution: SL 61.6%, TP 28.4%, UNRESOLVED 9.8%, SAME_CANDLE_SL_FIRST 0.1%.
+- Directional A1 (baseline-only, 249 train): **degenerate** — predicts single class, acc=0 on a test split with no `-1` support.
+- Directional A2 (full 1,116 train): acc 52%, F1_macro 0.51 — recall-heavy on rare classes (P low).
+- Filter (249 baseline train): acc 78% **by predicting BAD for everything** — class-1 (GOOD) precision/recall = 0.
+
+**Backtest comparison (test window 2024-11-18 → 2025-09-30):**
+
+| mode | trades | wr | pf | expectancy |
+|---|---|---|---|---|
+| A_baseline | 50 | 31.8% | 0.83 | −0.05R |
+| B_path_c | 34 | 33.3% | ~1.00 | ~0R |
+| H_no_weak | 5 | 60% | * | * |
+| I_strong_only | 0 | — | — | — |
+| E_path_d_filter | — | — | — | (blocked all) |
+| F_hybrid | — | — | — | (blocked all) |
+
+(* H/I/J non-AI tier filters drop rr_values — pf/expectancy not populated; minor reporting gap.)
+
+**Verdict: do not deploy Path D filter.**
+- Filter learned the majority-class shortcut (predict BAD always). At every sweep threshold 0.50–0.75, kept_trades=0 → fails the 25% baseline floor by construction.
+- Directional A1 degenerate; A2 over-predicts rare directional classes (P low, R high).
+- Path C still narrowly leads on out-of-sample PF (~1.0 vs baseline 0.83). Path D adds infrastructure but no edge yet.
+
+**Root cause of filter degeneracy:** dataset is small (357 baseline rows), heavily imbalanced (72% BAD), and the LGBM `class_weight=balanced` with `predict_proba` threshold sweep should help — but at all tested thresholds the GOOD probability never exceeds 0.50, so the filter blocks every signal. Need calibration (e.g., isotonic) or lower-threshold sweep (0.20–0.45) or richer features.
+
+**Recommended next iterations:**
+1. Lower threshold sweep to {0.20, 0.25, 0.30, 0.35, 0.40, 0.45} — the model's `good_prob` distribution is shifted left because of class imbalance.
+2. Drop step_h1 to 1 on M15 (not H1) to multiply baseline samples ~16x.
+3. Add probability calibration (`CalibratedClassifierCV`) to make threshold semantics meaningful.
+4. Fix `tier_filter_result` to preserve rr_values (or recompute from outcome class) so H/I/J get real PF/expectancy.
+5. Consider focal loss or up-sampling the minority TP class.
+
+**Files added:** `xau_pro_bot/models/{trade_outcome,path_d_harvest,train_path_d,trade_filter_model}.py`, `xau_pro_bot/signals/hybrid_policy.py`, `scripts/{train_path_d_model,eval_path_d}.py`, `docs/superpowers/specs/2026-05-13-path-d-trade-outcome-design.md`, `docs/superpowers/plans/2026-05-13-path-d-trade-outcome.md`, `docs/reports/path_d_trade_outcome_results.md`, 7 new test files.
+
+**Commits:** `9deada9` → `7e5ae86` → `08d8842` → `e91d538` → `5dee0b6` → `53acb01` → `c1540ff` → `9fca8b7` → `f014982` → `27df0f6` → `37ea3c9` → `b797e4a` → `4ba35a4`.
