@@ -45,6 +45,7 @@ class MasterSignalEngine:
                 cache_dir=str(ai_cfg["cache_dir"]),
                 revision=str(ai_cfg["revision"]),
                 filename=str(ai_cfg["model_filename"]),
+                local_path=str(ai_cfg["local_path"]),
             )
 
     @staticmethod

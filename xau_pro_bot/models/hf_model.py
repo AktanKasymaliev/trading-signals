@@ -51,12 +51,14 @@ class HFTradingModel:
         cache_dir: str | None = None,
         revision: str | None = None,
         filename: str = "",
+        local_path: str = "",
     ) -> None:
         self.model_id = model_id
         self.model_type = model_type
         self.cache_dir = cache_dir
         self.revision = revision
         self.filename = filename
+        self.local_path = local_path
         self._model: Any | None = None
 
     def _neutral(self, error: str) -> dict[str, Any]:
@@ -72,7 +74,7 @@ class HFTradingModel:
     def _load(self) -> Any:
         if self._model is not None:
             return self._model
-        if not self.model_id:
+        if not self.model_id and not self.local_path:
             raise RuntimeError("model_id is required for Hugging Face model loading")
 
         if self.model_type == "sklearn":
@@ -87,6 +89,9 @@ class HFTradingModel:
         return self._model
 
     def _load_sklearn(self) -> Any:
+        if self.local_path:
+            log.info("Loading local sklearn artifact from %s", self.local_path)
+            return joblib.load(self.local_path)
         if not _is_commit_sha(self.revision):
             raise RuntimeError(
                 "sklearn/joblib models require a pinned 40-character commit SHA "

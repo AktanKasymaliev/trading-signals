@@ -142,6 +142,7 @@ def load_ai_config() -> dict[str, str | bool | float | int]:
         "revision": os.getenv("AI_MODEL_REVISION", ""),
         "model_filename": os.getenv("AI_MODEL_FILENAME", ""),
         "feature_set": os.getenv("AI_FEATURE_SET", "internal"),
+        "local_path": os.getenv("AI_MODEL_LOCAL_PATH", ""),
     }
 
 
