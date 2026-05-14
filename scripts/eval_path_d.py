@@ -74,7 +74,14 @@ def _result_summary(r: BacktestResult) -> dict:
 
 
 def tier_filter_result(r: BacktestResult, keep: set[str]) -> BacktestResult:
-    """Synthesize a 'baseline-without-tier-X' result from per_tier counters."""
+    """Synthesize a 'baseline-without-tier-X' result from per_tier counters.
+
+    Carries rr_values, pnl_r, and equity_curve for the kept tiers so that
+    PF / Expectancy / MaxDD on the synthesized result are honest. The old
+    implementation only populated rr_values, which left H_no_weak /
+    I_strong_only / J_strong_normal_only with PF=0 / Expectancy=0 despite
+    non-zero trade counts.
+    """
     out = BacktestResult()
     out.per_tier = {t: {"n": 0, "w": 0, "l": 0, "rr": []} for t in keep}
     for tier, cnt in r.per_tier.items():
@@ -85,21 +92,29 @@ def tier_filter_result(r: BacktestResult, keep: set[str]) -> BacktestResult:
             tier_rr = list(cnt.get("rr", []))
             out.per_tier[tier] = {**cnt, "rr": tier_rr}
             out.rr_values.extend(tier_rr)
+    out.pnl_r = list(out.rr_values)
+    running = 0.0
+    out.equity_curve = []
+    for r_value in out.pnl_r:
+        running += r_value
+        out.equity_curve.append(running)
     return out
 
 
 def pick_best_threshold(sweep: dict[float, dict], *, min_kept: int) -> float | None:
     """Return threshold with highest PF among entries where kept >= min_kept.
 
-    Tie-break by lower threshold value. If none qualify by min_kept, fall back
-    to the entry with the highest kept count. Returns None for empty sweep.
+    Tie-break by lower threshold value. Returns None (NO-GO) when no
+    threshold meets min_kept or when the sweep is empty. Callers must
+    treat None as a hard veto and skip test-slice evaluation.
     """
     if not sweep:
         return None
     eligible = {t: m for t, m in sweep.items() if m["kept"] >= min_kept}
-    pool = eligible if eligible else sweep
+    if not eligible:
+        return None
     return sorted(
-        pool.items(),
+        eligible.items(),
         key=lambda kv: (kv[1]["pf"], -kv[0]),
         reverse=True,
     )[0][0]
@@ -185,6 +200,11 @@ def run_all_modes(history, *, path_c_local: str | None,
 
             # NORMAL + STRONG only (same as no_weak by definition, but kept for clarity)
             results["F_hybrid_normal_strong"] = results["F_hybrid_no_weak"]
+        else:
+            results["E_path_d_filter"] = {
+                "trades": 0, "pf": 0.0, "expectancy": 0.0,
+                "no_go": True, "reason": "no_threshold_meets_min_kept",
+            }
 
     # K Path D filter calibrated — separate model, same sweep/selection logic
     if path_d_filter_calibrated and Path(path_d_filter_calibrated).exists():
@@ -212,6 +232,11 @@ def run_all_modes(history, *, path_c_local: str | None,
             results["K_path_d_filter_calibrated"] = _result_summary(k)
             results.setdefault("threshold_sweeps", {})["K_path_d_filter_calibrated"] = sweep_cal
             results.setdefault("chosen_thresholds", {})["K_path_d_filter_calibrated"] = float(chosen_cal)
+        else:
+            results["K_path_d_filter_calibrated"] = {
+                "trades": 0, "pf": 0.0, "expectancy": 0.0,
+                "no_go": True, "reason": "no_threshold_meets_min_kept",
+            }
 
     # L Path E — expected-R filter; predicted_R sweep on validation, best applied to test
     chosen_er = None
@@ -238,6 +263,11 @@ def run_all_modes(history, *, path_c_local: str | None,
             l_res = run_backtest(history, filter_model=flt,
                                  walk_from=t_test, **base_kwargs)
             results["L_path_e_expected_r"] = _result_summary(l_res)
+        else:
+            results["L_path_e_expected_r"] = {
+                "trades": 0, "pf": 0.0, "expectancy": 0.0,
+                "no_go": True, "reason": "no_threshold_meets_min_kept",
+            }
 
     return {
         "results": results,
