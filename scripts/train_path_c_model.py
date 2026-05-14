@@ -26,6 +26,9 @@ def main() -> int:
     p.add_argument("--step", type=int, default=8)
     p.add_argument("--horizon", type=int, default=16)
     p.add_argument("--threshold", type=float, default=0.003)
+    p.add_argument("--feature-set", choices=["legacy", "stationary"],
+                   default="legacy",
+                   help="Path F: 'stationary' uses build_stationary_features (B2 retrain).")
     args = p.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -46,7 +49,8 @@ def main() -> int:
     print(f"Building dataset (step={args.step}, horizon={args.horizon}, "
           f"threshold={args.threshold})...")
     X, y = build_training_dataset(history, step=args.step, horizon=args.horizon,
-                                   threshold=args.threshold)
+                                   threshold=args.threshold,
+                                   feature_set=args.feature_set)
     print(f"Dataset: X={X.shape}, y class distribution={y.value_counts().to_dict()}")
     if len(X) < 100:
         print("Not enough samples to train.")
@@ -57,8 +61,10 @@ def main() -> int:
     print(json.dumps({k: v for k, v in metrics.items() if k != "report"}, indent=2))
     print("\nClassification report:\n" + metrics["report"])
 
-    save_model(model, args.out)
-    print(f"Model saved to {args.out}")
+    save_model(model, args.out,
+               feature_cols=list(X.columns),
+               feature_set=args.feature_set)
+    print(f"Model saved to {args.out} (feature_set={args.feature_set})")
     return 0
 
 

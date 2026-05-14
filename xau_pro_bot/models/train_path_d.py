@@ -118,9 +118,11 @@ def train_filter(df: pd.DataFrame, *, policy: str = "tp1_unresolved_bad"):
     return model, m
 
 
-def save_model(model, feature_cols: list[str], path: str | Path) -> None:
+def save_model(model, feature_cols: list[str], path: str | Path,
+               *, feature_set: str = "legacy") -> None:
     Path(path).parent.mkdir(parents=True, exist_ok=True)
-    joblib.dump({"model": model, "feature_cols": feature_cols}, path)
+    joblib.dump({"model": model, "feature_cols": feature_cols,
+                 "feature_set": feature_set}, path)
 
 
 def train_filter_calibrated(df: pd.DataFrame, *, policy: str = "tp1_unresolved_bad"):

@@ -178,6 +178,9 @@ def main() -> int:
                     help="Optional DXY price CSV for macro features.")
     ap.add_argument("--us10y-csv", default=None,
                     help="Optional US10Y yield CSV for macro features.")
+    ap.add_argument("--feature-set", choices=["legacy", "stationary"],
+                    default="legacy",
+                    help="Path F: 'stationary' harvests with build_stationary_features (L2/L3).")
     args = ap.parse_args()
 
     history = _load_history(Path(args.csv))
@@ -212,7 +215,8 @@ def main() -> int:
 
     cfg = HarvestConfig(step_h1=args.step_h1, timeout_m15=args.timeout_m15,
                         include_synthetic=True, synth_stride=args.synth_stride,
-                        dxy_csv=args.dxy_csv, us10y_csv=args.us10y_csv)
+                        dxy_csv=args.dxy_csv, us10y_csv=args.us10y_csv,
+                        feature_set=args.feature_set)
     df = harvest_path_d_samples(history, cfg)
     print(f"Dataset: rows={len(df)}, baseline={int(df['baseline_sample'].sum())}, "
           f"synthetic={int(df['is_synthetic'].sum())}")
@@ -233,15 +237,18 @@ def main() -> int:
 
     print("Training Directional A1...")
     m_a1, met_a1 = train_directional(df, variant="A1")
-    save_model(m_a1, met_a1["feature_cols"], out_dir / "path_d_directional_a1_lgb.joblib")
+    save_model(m_a1, met_a1["feature_cols"], out_dir / "path_d_directional_a1_lgb.joblib",
+               feature_set=args.feature_set)
 
     print("Training Directional A2...")
     m_a2, met_a2 = train_directional(df, variant="A2")
-    save_model(m_a2, met_a2["feature_cols"], out_dir / "path_d_directional_a2_lgb.joblib")
+    save_model(m_a2, met_a2["feature_cols"], out_dir / "path_d_directional_a2_lgb.joblib",
+               feature_set=args.feature_set)
 
     print("Training Filter...")
     m_f, met_f = train_filter(df)
-    save_model(m_f, met_f["feature_cols"], out_dir / "path_d_trade_outcome_lgb.joblib")
+    save_model(m_f, met_f["feature_cols"], out_dir / "path_d_trade_outcome_lgb.joblib",
+               feature_set=args.feature_set)
     try:
         _acceptance_guard(met_f)
     except SystemExit as exc:
@@ -255,7 +262,8 @@ def main() -> int:
         print("Training Calibrated Filter...")
         m_cal, met_cal = train_filter_calibrated(df)
         save_model(m_cal, met_cal["feature_cols"],
-                   out_dir / "path_d_trade_outcome_calibrated.joblib")
+                   out_dir / "path_d_trade_outcome_calibrated.joblib",
+                   feature_set=args.feature_set)
         try:
             _acceptance_guard(met_cal)
         except SystemExit as exc:
@@ -270,7 +278,8 @@ def main() -> int:
         from xau_pro_bot.models.expected_r import train_expected_r_regressor
         m_er, met_er = train_expected_r_regressor(df)
         save_model(m_er, met_er["feature_cols"],
-                   out_dir / "path_e_expected_r_lgb.joblib")
+                   out_dir / "path_e_expected_r_lgb.joblib",
+                   feature_set=args.feature_set)
 
     metrics = {
         "outcome_distribution": outcome_dist,

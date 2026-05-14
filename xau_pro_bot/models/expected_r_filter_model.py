@@ -29,10 +29,12 @@ class ExpectedRFilterModel:
         self.local_path = local_path
         self.threshold = float(threshold)
         self._bundle: dict | None = None
+        self.feature_set: str = "legacy"
 
     def _load(self) -> dict:
         if self._bundle is None:
             self._bundle = joblib.load(self.local_path)
+            self.feature_set = str(self._bundle.get("feature_set", "legacy"))
         return self._bundle
 
     def _align(self, X: pd.DataFrame, cols: list[str]) -> pd.DataFrame:

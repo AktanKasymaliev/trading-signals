@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 
 from xau_pro_bot.models.features import build_ai_features
+from xau_pro_bot.models.features_stationary import build_stationary_features
 
 log = logging.getLogger(__name__)
 
@@ -33,8 +34,14 @@ def label_forward_returns(close: pd.Series, horizon: int = 16,
 
 def build_training_dataset(history: dict[str, pd.DataFrame], *,
                            step: int = 8, horizon: int = 16,
-                           threshold: float = 0.003) -> tuple[pd.DataFrame, pd.Series]:
-    """Walk M15 bars, build features at each cutoff, label by forward return."""
+                           threshold: float = 0.003,
+                           feature_set: str = "legacy",
+                           ) -> tuple[pd.DataFrame, pd.Series]:
+    """Walk M15 bars, build features at each cutoff, label by forward return.
+
+    feature_set: "legacy" -> build_ai_features (29 cols, includes raw prices).
+                 "stationary" -> build_stationary_features (17 normalised cols).
+    """
     m15 = history["M15"]
     labels_full = label_forward_returns(m15["Close"], horizon=horizon, threshold=threshold)
 
@@ -53,7 +60,10 @@ def build_training_dataset(history: dict[str, pd.DataFrame], *,
             "W1":  history["W1"].loc[:cutoff].tail(720),
         }
         try:
-            features, complete = build_ai_features(slice_data)
+            if feature_set == "stationary":
+                features, complete = build_stationary_features(slice_data)
+            else:
+                features, complete = build_ai_features(slice_data)
         except Exception:
             continue
         if not complete:
@@ -120,6 +130,22 @@ def train_lightgbm(X: pd.DataFrame, y: pd.Series, *,
     return model, metrics
 
 
-def save_model(model, path: str | Path) -> None:
+def save_model(model, path: str | Path, *,
+               feature_cols: list[str] | None = None,
+               feature_set: str = "legacy") -> None:
+    """Persist trained Path C model.
+
+    Legacy callers (feature_cols=None, feature_set="legacy") get the
+    historical raw-model joblib for backward compatibility with existing
+    loaders. New callers can supply feature_cols + feature_set and a
+    dict bundle is written instead; the loader recognises both shapes.
+    """
     Path(path).parent.mkdir(parents=True, exist_ok=True)
-    joblib.dump(model, path)
+    if feature_cols is None and feature_set == "legacy":
+        joblib.dump(model, path)
+        return
+    joblib.dump({
+        "model": model,
+        "feature_cols": list(feature_cols) if feature_cols is not None else [],
+        "feature_set": feature_set,
+    }, path)

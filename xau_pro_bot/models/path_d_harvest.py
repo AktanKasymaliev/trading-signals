@@ -12,11 +12,13 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from typing import Literal
 
 import numpy as np
 import pandas as pd
 
 from xau_pro_bot.models.features import build_ai_features
+from xau_pro_bot.models.features_stationary import build_stationary_features
 from xau_pro_bot.models.label_policy import apply_label_policy
 from xau_pro_bot.models.trade_outcome import (
     OutcomeClass,
@@ -47,6 +49,10 @@ class HarvestConfig:
     # schema stability.
     dxy_csv: str | None = None
     us10y_csv: str | None = None
+    # Path F feature-set selector. "legacy" uses build_ai_features (29 cols
+    # including absolute price levels). "stationary" uses build_stationary_features
+    # (17 cols, all normalised — no absolute price levels).
+    feature_set: Literal["legacy", "stationary"] = "legacy"
 
 
 def _load_macro_csv(path: str | None) -> pd.Series | None:
@@ -188,7 +194,10 @@ def harvest_path_d_samples(history: dict[str, pd.DataFrame],
             break
 
         try:
-            feats_29, complete = build_ai_features(slice_data)
+            if cfg.feature_set == "stationary":
+                feats_29, complete = build_stationary_features(slice_data)
+            else:
+                feats_29, complete = build_ai_features(slice_data)
         except Exception:
             continue
         if not complete:
@@ -286,7 +295,10 @@ def harvest_path_d_samples(history: dict[str, pd.DataFrame],
             if len(m15_future) < 10:
                 break
             try:
-                feats_29, complete = build_ai_features(slice_data)
+                if cfg.feature_set == "stationary":
+                    feats_29, complete = build_stationary_features(slice_data)
+                else:
+                    feats_29, complete = build_ai_features(slice_data)
             except Exception:
                 continue
             if not complete:

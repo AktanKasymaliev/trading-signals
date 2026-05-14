@@ -91,7 +91,15 @@ class HFTradingModel:
     def _load_sklearn(self) -> Any:
         if self.local_path:
             log.info("Loading local sklearn artifact from %s", self.local_path)
-            return joblib.load(self.local_path)
+            loaded = joblib.load(self.local_path)
+            if isinstance(loaded, dict) and "model" in loaded:
+                # Path F bundle: {"model": ..., "feature_cols": [...], "feature_set": "..."}
+                self.feature_cols = list(loaded.get("feature_cols", []))
+                self.feature_set = loaded.get("feature_set", "legacy")
+                return loaded["model"]
+            self.feature_cols = []
+            self.feature_set = "legacy"
+            return loaded
         if not _is_commit_sha(self.revision):
             raise RuntimeError(
                 "sklearn/joblib models require a pinned 40-character commit SHA "
