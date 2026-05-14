@@ -319,6 +319,25 @@ def write_report(payload: dict, out_path: Path,
                 f"{m.get('max_dd', 0.0):.3f} | {m.get('avg_rr', 0.0):.3f} |"
             )
 
+    er_sweep = payload.get("expected_r_sweep") or {}
+    if er_sweep:
+        chosen_er = payload.get("chosen_expected_r_threshold")
+        lines += [
+            "",
+            "## L Path E (expected_R) — Threshold Sweep (validation)",
+            "",
+            f"**Chosen threshold (predicted_R >):** {chosen_er}",
+            "",
+            "| th | kept | blocked | PF | Expectancy | WR | MaxDD | AvgRR |",
+            "|---|---|---|---|---|---|---|---|",
+        ]
+        for t, m in sorted(er_sweep.items()):
+            lines.append(
+                f"| {t:.2f} | {m['kept']} | {m['blocked']} | "
+                f"{m['pf']:.3f} | {m['expectancy']:.3f} | {m['wr']:.3f} | "
+                f"{m.get('max_dd', 0.0):.3f} | {m.get('avg_rr', 0.0):.3f} |"
+            )
+
     base_trades = res.get("A_baseline", {}).get("trades", 0)
     lines += [
         "",

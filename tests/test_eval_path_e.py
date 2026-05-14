@@ -33,3 +33,16 @@ def test_path_e_mode_in_results(long_history, tmp_path):
     if payload["chosen_expected_r_threshold"] is not None:
         assert payload["chosen_expected_r_threshold"] in sweep
         assert "L_path_e_expected_r" in res
+
+
+def test_report_contains_path_e_section(long_history, tmp_path):
+    from scripts.eval_path_d import run_all_modes, write_report
+    bundle = tmp_path / "e.joblib"
+    joblib.dump({"model": _Reg(), "feature_cols": ["bull_score"]}, bundle)
+    payload = run_all_modes(long_history, path_c_local=None,
+                            path_d_filter=None, path_e=str(bundle))
+    out = tmp_path / "report.md"
+    write_report(payload, out)
+    text = out.read_text()
+    assert "Path E (expected_R)" in text
+    assert "Chosen threshold" in text
