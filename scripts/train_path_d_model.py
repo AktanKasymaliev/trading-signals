@@ -28,6 +28,24 @@ from xau_pro_bot.models.train_path_d import (
 )
 
 
+def _acceptance_guard(metrics: dict, *, min_kept_pct: float = 0.05) -> None:
+    """Raise SystemExit if the trained filter is operationally useless.
+
+    Iteration 2 invariant: a model that predicts BAD for everything, or keeps
+    fewer than `min_kept_pct` of test trades, is not a viable trade filter
+    regardless of its accuracy on the BAD-majority class.
+    """
+    if metrics.get("predicts_only_bad"):
+        raise SystemExit("acceptance guard: model predicts BAD for every test sample")
+    cm = metrics.get("confusion_matrix")
+    if cm:
+        kept_pred = sum(row[1] for row in cm)
+        total = sum(sum(row) for row in cm)
+        if total > 0 and (kept_pred / total) < min_kept_pct:
+            raise SystemExit(
+                f"acceptance guard: kept_pct={kept_pred/total:.3f} < {min_kept_pct}")
+
+
 def _load_history(csv: Path) -> dict[str, pd.DataFrame]:
     m15 = pd.read_csv(csv)
     m15["datetime"] = pd.to_datetime(m15["datetime"], utc=True)
@@ -51,6 +69,8 @@ def main() -> int:
     ap.add_argument("--step-h1", type=int, default=4)
     ap.add_argument("--timeout-m15", type=int, default=192)
     ap.add_argument("--synth-stride", type=int, default=8)
+    ap.add_argument("--allow-degenerate", action="store_true", default=False,
+                    help="Downgrade acceptance guard from SystemExit to a warning")
     args = ap.parse_args()
 
     out_dir = Path(args.out_dir); out_dir.mkdir(parents=True, exist_ok=True)
@@ -81,6 +101,13 @@ def main() -> int:
     print("Training Filter...")
     m_f, met_f = train_filter(df)
     save_model(m_f, met_f["feature_cols"], out_dir / "path_d_trade_outcome_lgb.joblib")
+    try:
+        _acceptance_guard(met_f)
+    except SystemExit as exc:
+        if args.allow_degenerate:
+            print(f"warning: {exc}")
+        else:
+            raise
 
     metrics = {
         "outcome_distribution": outcome_dist,
