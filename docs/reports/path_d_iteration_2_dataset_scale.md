@@ -149,6 +149,29 @@ iteration 3.
 
 ---
 
+## Label Policy Sweep (training metrics, not deployed)
+
+`models_cache/path_d_filter_policy_sweep.json` — uncalibrated classifier per label policy:
+
+| policy | n | class_balance | precision_macro | recall_macro | kept_pct | degenerate |
+|---|---|---|---|---|---|---|
+| tp1_unresolved_bad | 8,797 | 21.0 % | 0.615 | 0.605 | 18.6 % | No |
+| tp1_unresolved_drop | 5,626 | 35.3 % | 0.646 | 0.556 | 9.6 % | No |
+| tp2_unresolved_bad | 8,797 | 21.0 % | 0.615 | 0.605 | 18.6 % | No |
+| plus_1r_before_minus_1r | 8,797 | 20.0 % | 0.601 | 0.598 | 19.2 % | No |
+| plus_1_5r_before_minus_1r | 8,797 | 20.0 % | 0.578 | 0.602 | 29.8 % | No |
+
+**Reading:** none of the five policies reach a precision macro above 0.65. The model is
+hitting a structural precision wall, not a label-encoding problem. Re-labeling alone
+will not produce a deployable filter — feature space lacks the separation, regardless of
+policy choice.
+
+The `tp1_unresolved_drop` policy reduces n to 5,626 (drops UNRESOLVED rows). It slightly
+trades recall for precision (0.646 vs 0.615) but kept_pct also drops to 9.6 % — net effect
+is more selectivity without enough lift to be useful.
+
+---
+
 ## Iteration-2 Acceptance Trace
 
 > Threshold chosen on validation only. Test set used exactly once.
