@@ -69,14 +69,15 @@ def _result_summary(r: BacktestResult) -> dict:
 def tier_filter_result(r: BacktestResult, keep: set[str]) -> BacktestResult:
     """Synthesize a 'baseline-without-tier-X' result from per_tier counters."""
     out = BacktestResult()
-    out.per_tier = {t: {"n": 0, "w": 0, "l": 0} for t in keep}
+    out.per_tier = {t: {"n": 0, "w": 0, "l": 0, "rr": []} for t in keep}
     for tier, cnt in r.per_tier.items():
         if tier in keep:
             out.signals_generated += cnt["n"]
             out.wins += cnt["w"]
             out.losses += cnt["l"]
-            out.per_tier[tier] = dict(cnt)
-    out.rr_values = []
+            tier_rr = list(cnt.get("rr", []))
+            out.per_tier[tier] = {**cnt, "rr": tier_rr}
+            out.rr_values.extend(tier_rr)
     return out
 
 
@@ -114,7 +115,8 @@ def run_all_modes(history, *, path_c_local: str | None,
     a = run_backtest(history, walk_from=t_test, **base_kwargs)
     results["A_baseline"] = _result_summary(a)
 
-    # H/I/J non-AI tier filters
+    # G/H/I/J non-AI tier baselines
+    results["G_baseline_all"]       = _result_summary(a)
     results["H_no_weak"]            = _result_summary(tier_filter_result(a, {"NORMAL", "STRONG"}))
     results["I_strong_only"]        = _result_summary(tier_filter_result(a, {"STRONG"}))
     results["J_strong_normal_only"] = _result_summary(tier_filter_result(a, {"NORMAL", "STRONG"}))
