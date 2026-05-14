@@ -329,3 +329,37 @@ TP and SL trades look similar in feature space; a probability filter cannot sepa
 > incorrect. Code review confirmed `TradeFilterModel` re-thresholds `predict_proba`
 > per call; the real cause is the good-prob distribution being concentrated below
 > all tested thresholds.
+
+---
+
+## Path E (Expected R Regressor) — 2026-05-14 — **NO-GO**
+
+Full report: `docs/reports/path_e_expected_r_results.md`. Plan: `docs/superpowers/plans/2026-05-14-path-e-expected-r.md`. All Path E commits between `f743c72` and HEAD on `feature/hugging-face-ai-layer`.
+
+**What changed this iteration:**
+- Promoted `xau_pro_bot/models/expected_r.py` stub → production trainer with gain-importance metrics.
+- `ExpectedRFilterModel` runtime adapter (`predicted_R ≥ threshold → KEEP`), drop-in for `filter_model=` in `run_backtest`.
+- Engine routing branch in `xau_pro_bot/signals/engine.py`: filter results carrying `predicted_r` are routed past `hybrid_decide` and consume `decision` directly. Path D shape (`good_prob`/`bad_prob`) unchanged.
+- `--expected-r`, `--dxy-csv`, `--us10y-csv` trainer flags.
+- DXY/US10Y feature wiring in `path_d_harvest.py` — off by default; opt-in via `HarvestConfig.dxy_csv` / `us10y_csv`.
+- New eval mode `L_path_e_expected_r` with predicted_R sweep `(0.00, 0.03, 0.05, 0.10, 0.15)` reusing the existing `pick_best_threshold(min_kept=...)` 25% floor.
+- ~10 new tests; full suite 247 passed, 1 skipped.
+
+**Acceptance gates (test window 2024-11-18 → 2025-09-30):**
+
+| gate | result | pass |
+|---|---|---|
+| Kept ≥ 25% of A_baseline (97 trades) | **L_path_e: 0 trades** | ❌ |
+| PF on test > B_path_c (1.011) | L_path_e: 0.000 | ❌ |
+| PF on test > H_no_weak | 0.000 vs report-broken | ❌ |
+| Expectancy on test > H_no_weak | 0.000 | ❌ |
+| Threshold chosen on validation only | yes (0.15) | ✅ |
+
+**Why NO-GO:** validation/test distribution shift. The chosen threshold `predicted_R > 0.15` looked superb on validation (PF=9.0, n=27) but blocked 391/391 trades on the test slice. Feature importance shows raw price levels (`close_d1` gain 5422, `close_m15` 2751) dominating — the regressor memorised the train-regime price level rather than learning regime-invariant structure.
+
+**Process bug surfaced:** the 25%-kept floor was violated already on validation (chosen threshold kept 27 ≪ 97). `pick_best_threshold` silently fell back to "highest PF" because no entry met the floor. Acceptable for Path D's continuous classifier but masks failure for Path E's skewed predictions.
+
+**Recommendation:**
+- **Best practical next step:** stick with Path C as the production AI gate (test PF 1.011, n=206, 53% kept). Path C is the only mode that beats baseline.
+- **If Path E is revisited:** drop absolute price columns from the feature space (use normalised returns / EMA distance ratios); try MFE/MAE-derived targets; collect DXY/US10Y at M15 frequency.
+- **Carry-over fixes still pending from iter-2:** `tier_filter_result.rr_values` aggregation bug (H/I/J modes report PF=0 incorrectly); `train_filter_calibrated` cv=3 + ignored `va` split.
