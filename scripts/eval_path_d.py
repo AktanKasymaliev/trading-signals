@@ -54,7 +54,7 @@ def _load(csv: Path) -> dict[str, pd.DataFrame]:
 
 
 def _result_summary(r: BacktestResult) -> dict:
-    return {
+    summary: dict = {
         "trades": r.signals_generated,
         "blocked": r.blocked_signals,
         "wins": r.wins, "losses": r.losses,
@@ -64,6 +64,12 @@ def _result_summary(r: BacktestResult) -> dict:
         "avg_rr": round(r.average_rr, 4),
         "max_dd": round(r.max_drawdown, 4),
     }
+    if r.per_tier:
+        summary["by_tier"] = {
+            t: {"n": cnt["n"], "w": cnt["w"], "l": cnt["l"]}
+            for t, cnt in r.per_tier.items()
+        }
+    return summary
 
 
 def tier_filter_result(r: BacktestResult, keep: set[str]) -> BacktestResult:
@@ -101,6 +107,7 @@ def pick_best_threshold(sweep: dict[float, dict], *, min_kept: int) -> float | N
 
 def run_all_modes(history, *, path_c_local: str | None,
                   path_d_filter: str | None,
+                  path_d_filter_calibrated: str | None = None,
                   val_split=(0.70, 0.85)) -> dict:
     h1 = history["H1"]
     n = len(h1)
@@ -128,11 +135,12 @@ def run_all_modes(history, *, path_c_local: str | None,
                          walk_from=t_test, **base_kwargs)
         results["B_path_c"] = _result_summary(b)
 
+    min_kept = max(1, int(a.signals_generated * 0.25))
+
     # E Path D filter — pick threshold on validation window only
     chosen_threshold = None
     sweep: dict = {}
     if path_d_filter and Path(path_d_filter).exists():
-        min_kept = max(1, int(a.signals_generated * 0.25))
         sweep = {}
         for t in THRESHOLDS:
             flt = TradeFilterModel(local_path=path_d_filter, threshold=float(t))
@@ -163,6 +171,33 @@ def run_all_modes(history, *, path_c_local: str | None,
                              walk_from=t_test, **base_kwargs)
             results["F_hybrid"] = _result_summary(f)
 
+    # K Path D filter calibrated — separate model, same sweep/selection logic
+    if path_d_filter_calibrated and Path(path_d_filter_calibrated).exists():
+        sweep_cal: dict = {}
+        for t in THRESHOLDS:
+            flt = TradeFilterModel(local_path=path_d_filter_calibrated, threshold=float(t))
+            r = run_backtest(history, filter_model=flt,
+                             walk_from=t_val, walk_to=t_test, **base_kwargs)
+            sweep_cal[t] = {
+                "pf": float(r.profit_factor),
+                "expectancy": float(r.expectancy),
+                "wr": float(r.win_rate),
+                "kept": int(r.signals_generated),
+                "blocked": int(r.blocked_signals),
+                "max_dd": float(r.max_drawdown),
+                "avg_rr": float(r.average_rr),
+                "per_tier": dict(r.per_tier),
+            }
+        chosen_cal = pick_best_threshold(sweep_cal, min_kept=min_kept)
+        if chosen_cal is not None:
+            flt = TradeFilterModel(local_path=path_d_filter_calibrated,
+                                   threshold=float(chosen_cal))
+            k = run_backtest(history, filter_model=flt,
+                             walk_from=t_test, **base_kwargs)
+            results["K_path_d_filter_calibrated"] = _result_summary(k)
+            results.setdefault("threshold_sweeps", {})["K_path_d_filter_calibrated"] = sweep_cal
+            results.setdefault("chosen_thresholds", {})["K_path_d_filter_calibrated"] = float(chosen_cal)
+
     return {
         "results": results,
         "threshold_sweep": sweep,
@@ -172,6 +207,9 @@ def run_all_modes(history, *, path_c_local: str | None,
     }
 
 
+_NON_MODE_KEYS = {"threshold_sweeps", "chosen_thresholds"}
+
+
 def _md_table(summary: dict[str, dict]) -> str:
     cols = ["trades", "blocked", "wins", "losses", "wr",
             "expectancy", "pf", "avg_rr", "max_dd"]
@@ -179,6 +217,8 @@ def _md_table(summary: dict[str, dict]) -> str:
     sep = "|" + "---|" * (len(cols) + 1)
     rows = []
     for k, v in summary.items():
+        if k in _NON_MODE_KEYS:
+            continue
         rows.append("| " + k + " | " + " | ".join(str(v.get(c, "")) for c in cols) + " |")
     return "\n".join([header, sep, *rows])
 
@@ -213,6 +253,29 @@ def write_report(payload: dict, out_path: Path,
             )
     else:
         lines.append("_(no sweep — filter not provided)_")
+
+    # K calibrated sweep (optional)
+    cal_sweeps = res.get("threshold_sweeps", {})
+    cal_thresholds = res.get("chosen_thresholds", {})
+    if "K_path_d_filter_calibrated" in cal_sweeps:
+        sweep_k = cal_sweeps["K_path_d_filter_calibrated"]
+        chosen_k = cal_thresholds.get("K_path_d_filter_calibrated")
+        lines += [
+            "",
+            "## K Calibrated Filter — Threshold Sweep (validation)",
+            "",
+            f"**Chosen threshold:** {chosen_k}",
+            "",
+            "| th | kept | blocked | PF | Expectancy | WR | MaxDD | AvgRR |",
+            "|---|---|---|---|---|---|---|---|",
+        ]
+        for t, m in sorted(sweep_k.items()):
+            lines.append(
+                f"| {t:.2f} | {m['kept']} | {m['blocked']} | "
+                f"{m['pf']:.3f} | {m['expectancy']:.3f} | {m['wr']:.3f} | "
+                f"{m.get('max_dd', 0.0):.3f} | {m.get('avg_rr', 0.0):.3f} |"
+            )
+
     base_trades = res.get("A_baseline", {}).get("trades", 0)
     lines += [
         "",
@@ -248,15 +311,18 @@ def main() -> int:
     ap.add_argument("--path-c", default="./models_cache/path_c_lgb.joblib")
     ap.add_argument("--path-d-filter",
                      default="./models_cache/path_d_trade_outcome_lgb.joblib")
+    ap.add_argument("--path-d-filter-calibrated", default=None)
     ap.add_argument("--report", default="docs/reports/path_d_trade_outcome_results.md")
     ap.add_argument("--metrics-json", default="models_cache/path_d_metrics.json")
     args = ap.parse_args()
 
     history = _load(Path(args.csv))
+    cal_path = args.path_d_filter_calibrated
     payload = run_all_modes(
         history,
         path_c_local=args.path_c if Path(args.path_c).exists() else None,
         path_d_filter=args.path_d_filter if Path(args.path_d_filter).exists() else None,
+        path_d_filter_calibrated=cal_path if cal_path and Path(cal_path).exists() else None,
     )
     write_report(payload, Path(args.report), Path(args.metrics_json))
     print(json.dumps(payload["results"], indent=2))

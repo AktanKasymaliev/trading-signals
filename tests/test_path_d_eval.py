@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import argparse
+
 from xau_pro_bot.backtest import BacktestResult
 from scripts.eval_path_d import (
     pick_best_threshold,
+    run_all_modes,
     tier_filter_result,
 )
 
@@ -26,6 +29,22 @@ def test_pick_best_threshold_prefers_higher_pf_then_more_trades():
     }
     # min_kept_floor=60 excludes 0.70; tie between 0.60 and 0.65 on PF, more-kept wins → 0.60
     assert pick_best_threshold(sweep, min_kept=60) == 0.60
+
+
+def test_run_all_modes_accepts_path_d_filter_calibrated_param():
+    """Verify run_all_modes accepts path_d_filter_calibrated kwarg (None = no-op)."""
+    import inspect
+    sig = inspect.signature(run_all_modes)
+    assert "path_d_filter_calibrated" in sig.parameters
+    assert sig.parameters["path_d_filter_calibrated"].default is None
+
+
+def test_k_mode_key_is_recognized_in_non_mode_keys():
+    """K_path_d_filter_calibrated should NOT appear in _NON_MODE_KEYS."""
+    from scripts.eval_path_d import _NON_MODE_KEYS
+    assert "K_path_d_filter_calibrated" not in _NON_MODE_KEYS
+    assert "threshold_sweeps" in _NON_MODE_KEYS
+    assert "chosen_thresholds" in _NON_MODE_KEYS
 
 
 def test_tier_filter_result_drops_below_tier():
