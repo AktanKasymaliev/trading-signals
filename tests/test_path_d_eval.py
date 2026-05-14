@@ -100,3 +100,15 @@ def test_tier_filter_result_carries_pnl_r_and_equity_curve():
     assert list(out.equity_curve) == [+1.5, +3.0, +4.5, +6.0]
     assert out.profit_factor > 0.0
     assert out.expectancy > 0.0
+
+
+def test_run_all_modes_accepts_path_f_kwargs():
+    """Path F: run_all_modes must expose B2/L2/L3 + macro CSV kwargs so the
+    report shape stays stable regardless of whether the artifacts exist."""
+    import inspect
+    from scripts.eval_path_d import run_all_modes
+    sig = inspect.signature(run_all_modes)
+    for kw in ("path_c_stationary", "path_e_stationary",
+               "path_e_stationary_macro", "dxy_csv", "us10y_csv"):
+        assert kw in sig.parameters, f"missing kwarg: {kw}"
+        assert sig.parameters[kw].default is None, f"{kw} default must be None"

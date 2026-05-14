@@ -152,6 +152,11 @@ def run_all_modes(history, *, path_c_local: str | None,
                   path_d_filter: str | None,
                   path_d_filter_calibrated: str | None = None,
                   path_e: str | None = None,
+                  path_c_stationary: str | None = None,
+                  path_e_stationary: str | None = None,
+                  path_e_stationary_macro: str | None = None,
+                  dxy_csv: str | None = None,
+                  us10y_csv: str | None = None,
                   val_split=(0.70, 0.85)) -> dict:
     h1 = history["H1"]
     n = len(h1)
@@ -296,6 +301,88 @@ def run_all_modes(history, *, path_c_local: str | None,
                 "no_go": True, "reason": "no_threshold_meets_min_kept",
             }
 
+    # B2 Path C stationary — same as B_path_c but with the stationary-tagged artifact.
+    # Engine dispatches features through the model's feature_set tag at predict time.
+    if path_c_stationary and Path(path_c_stationary).exists():
+        ai_b2 = HFTradingModel(model_id="", model_type="sklearn",
+                               local_path=path_c_stationary)
+        b2 = run_backtest(history, ai_model=ai_b2, use_ai=True,
+                          walk_from=t_test, **base_kwargs)
+        results["B2_path_c_stationary"] = _result_summary(b2)
+
+    # L2 Path E stationary — expected-R sweep on the stationary feature set.
+    sweep_l2: dict = {}
+    chosen_l2 = None
+    if path_e_stationary and Path(path_e_stationary).exists():
+        from xau_pro_bot.models.expected_r_filter_model import ExpectedRFilterModel
+        for t in EXPECTED_R_THRESHOLDS:
+            flt = ExpectedRFilterModel(local_path=path_e_stationary, threshold=float(t))
+            r = run_backtest(history, filter_model=flt,
+                             walk_from=t_val, walk_to=t_test, **base_kwargs)
+            sweep_l2[t] = {
+                "pf": float(r.profit_factor),
+                "expectancy": float(r.expectancy),
+                "wr": float(r.win_rate),
+                "kept": int(r.signals_generated),
+                "blocked": int(r.blocked_signals),
+                "max_dd": float(r.max_drawdown),
+                "avg_rr": float(r.average_rr),
+            }
+        chosen_l2 = pick_best_threshold(sweep_l2, min_kept=min_kept)
+        if chosen_l2 is not None:
+            flt = ExpectedRFilterModel(local_path=path_e_stationary,
+                                       threshold=float(chosen_l2))
+            l2_res = run_backtest(history, filter_model=flt,
+                                  walk_from=t_test, **base_kwargs)
+            results["L2_path_e_stationary"] = _result_summary(l2_res)
+            results.setdefault("threshold_sweeps", {})["L2_path_e_stationary"] = sweep_l2
+            results.setdefault("chosen_thresholds", {})["L2_path_e_stationary"] = float(chosen_l2)
+        else:
+            results["L2_path_e_stationary"] = {
+                "trades": 0, "pf": 0.0, "expectancy": 0.0,
+                "no_go": True, "reason": "no_threshold_meets_min_kept",
+            }
+
+    # L3 Path E stationary + macro — requires both DXY and US10Y CSVs.
+    sweep_l3: dict = {}
+    chosen_l3 = None
+    if path_e_stationary_macro and Path(path_e_stationary_macro).exists():
+        if not _check_macro_csvs(dxy_csv, us10y_csv):
+            results["L3_path_e_stationary_macro"] = {
+                "trades": 0, "pf": 0.0, "expectancy": 0.0,
+                "skipped": True, "reason": "NO_MACRO_DATA",
+            }
+        else:
+            from xau_pro_bot.models.expected_r_filter_model import ExpectedRFilterModel
+            for t in EXPECTED_R_THRESHOLDS:
+                flt = ExpectedRFilterModel(local_path=path_e_stationary_macro,
+                                           threshold=float(t))
+                r = run_backtest(history, filter_model=flt,
+                                 walk_from=t_val, walk_to=t_test, **base_kwargs)
+                sweep_l3[t] = {
+                    "pf": float(r.profit_factor),
+                    "expectancy": float(r.expectancy),
+                    "wr": float(r.win_rate),
+                    "kept": int(r.signals_generated),
+                    "blocked": int(r.blocked_signals),
+                    "max_dd": float(r.max_drawdown),
+                    "avg_rr": float(r.average_rr),
+                }
+            chosen_l3 = pick_best_threshold(sweep_l3, min_kept=min_kept)
+            if chosen_l3 is not None:
+                flt = ExpectedRFilterModel(local_path=path_e_stationary_macro,
+                                           threshold=float(chosen_l3))
+                l3_res = run_backtest(history, filter_model=flt,
+                                      walk_from=t_test, **base_kwargs)
+                results["L3_path_e_stationary_macro"] = _result_summary(l3_res)
+                results.setdefault("threshold_sweeps", {})["L3_path_e_stationary_macro"] = sweep_l3
+                results.setdefault("chosen_thresholds", {})["L3_path_e_stationary_macro"] = float(chosen_l3)
+            else:
+                results["L3_path_e_stationary_macro"] = {
+                    "trades": 0, "pf": 0.0, "expectancy": 0.0,
+                    "no_go": True, "reason": "no_threshold_meets_min_kept",
+                }
+
     return {
         "results": results,
         "threshold_sweep": sweep,
@@ -433,6 +520,16 @@ def main() -> int:
     ap.add_argument("--path-d-filter-calibrated", default=None)
     ap.add_argument("--path-e", default=None,
                     help="Path E expected_R joblib bundle.")
+    ap.add_argument("--path-c-stationary", default=None,
+                    help="Path F: Path C trained on the stationary feature set (B2).")
+    ap.add_argument("--path-e-stationary", default=None,
+                    help="Path F: Path E trained on the stationary feature set (L2).")
+    ap.add_argument("--path-e-stationary-macro", default=None,
+                    help="Path F: Path E trained on stationary+macro feature set (L3).")
+    ap.add_argument("--dxy-csv", default=None,
+                    help="DXY CSV (required for L3_path_e_stationary_macro).")
+    ap.add_argument("--us10y-csv", default=None,
+                    help="US10Y CSV (required for L3_path_e_stationary_macro).")
     ap.add_argument("--report", default="docs/reports/path_d_trade_outcome_results.md")
     ap.add_argument("--metrics-json", default="models_cache/path_d_metrics.json")
     args = ap.parse_args()
@@ -445,6 +542,11 @@ def main() -> int:
         path_d_filter=args.path_d_filter if Path(args.path_d_filter).exists() else None,
         path_d_filter_calibrated=cal_path if cal_path and Path(cal_path).exists() else None,
         path_e=args.path_e if args.path_e and Path(args.path_e).exists() else None,
+        path_c_stationary=args.path_c_stationary,
+        path_e_stationary=args.path_e_stationary,
+        path_e_stationary_macro=args.path_e_stationary_macro,
+        dxy_csv=args.dxy_csv,
+        us10y_csv=args.us10y_csv,
     )
     write_report(payload, Path(args.report), Path(args.metrics_json))
     print(json.dumps(payload["results"], indent=2))

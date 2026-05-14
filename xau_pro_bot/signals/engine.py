@@ -16,6 +16,7 @@ from xau_pro_bot.indicators.ict import (
 from xau_pro_bot.indicators.sr_zones import find_sr_zones
 from xau_pro_bot.models.calibration import ai_prediction_to_adjustment
 from xau_pro_bot.models.features import build_ai_features
+from xau_pro_bot.models.features_stationary import build_stationary_features
 from xau_pro_bot.models.smc_v2_features import build_smc_v2_features
 from xau_pro_bot.models.hf_model import HFTradingModel
 from xau_pro_bot.signals.hybrid_policy import (
@@ -24,6 +25,26 @@ from xau_pro_bot.signals.hybrid_policy import (
 from xau_pro_bot.signals.ict_signals import score_ict
 from xau_pro_bot.signals.smc_signals import score_smc
 from xau_pro_bot.signals.classic_signals import score_classic
+
+
+def _prime_feature_set(model: Any) -> str:
+    """Eagerly load the model bundle (if needed) and return its tagged
+    feature_set, defaulting to 'legacy'. Used so Path F artifacts trigger
+    the matching feature builder at inference time."""
+    if model is None:
+        return "legacy"
+    fs = getattr(model, "feature_set", None)
+    if fs:
+        return str(fs)
+    for loader in ("_load", "_get_model", "_load_sklearn"):
+        fn = getattr(model, loader, None)
+        if callable(fn):
+            try:
+                fn()
+            except Exception:
+                pass
+            break
+    return str(getattr(model, "feature_set", "legacy") or "legacy")
 
 
 class MasterSignalEngine:
@@ -135,7 +156,10 @@ class MasterSignalEngine:
                 "confidence": 0.0,
             }
         else:
-            if self.ai_feature_set == "smc_v2":
+            model_fs = _prime_feature_set(self.ai_model)
+            if model_fs == "stationary":
+                features, complete = build_stationary_features(data)
+            elif self.ai_feature_set == "smc_v2":
                 features, complete = build_smc_v2_features(data)
             else:
                 features, complete = build_ai_features(data)
@@ -284,7 +308,11 @@ class MasterSignalEngine:
         # Path D filter/hybrid gate (opt-in)
         if self.filter_model is not None and tier != "NO_SIGNAL":
             try:
-                feats_29, _complete = build_ai_features(data)
+                filter_fs = _prime_feature_set(self.filter_model)
+                if filter_fs == "stationary":
+                    feats_29, _complete = build_stationary_features(data)
+                else:
+                    feats_29, _complete = build_ai_features(data)
             except Exception:
                 feats_29 = pd.DataFrame([{}])
             filter_pred = self.filter_model.predict(feats_29)
