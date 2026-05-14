@@ -23,6 +23,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from xau_pro_bot.models.label_policy import LabelPolicy
 from xau_pro_bot.models.path_d_harvest import HarvestConfig, harvest_path_d_samples
 from xau_pro_bot.models.train_path_d import (
     save_model, train_directional, train_filter,
@@ -100,6 +101,61 @@ def _load_history(csv: Path) -> dict[str, pd.DataFrame]:
     }
 
 
+def _run_label_policy_sweep(df: pd.DataFrame, out_dir: Path) -> dict:
+    """Train filter once per LabelPolicy and write policy_sweep.json.
+
+    Returns the per-policy results dict (also written to disk).
+    Does NOT save per-policy joblib artifacts.
+    """
+    results: dict = {}
+    for policy in LabelPolicy:
+        pval = policy.value
+        try:
+            _model, metrics = train_filter(df, policy=pval)
+        except Exception as exc:  # noqa: BLE001
+            logging.warning("policy=%s failed: %s", pval, exc)
+            results[pval] = {"error": str(exc)}
+            continue
+
+        # Determine class_balance (fraction labelled GOOD=1) from confusion matrix
+        cm = metrics.get("confusion_matrix") or []
+        if cm:
+            total_positives = sum(cm[1]) if len(cm) > 1 else 0
+            total = sum(sum(row) for row in cm)
+            class_balance = float(total_positives / total) if total > 0 else 0.0
+        else:
+            class_balance = 0.0
+
+        predicts_only_bad = bool(
+            all(row[1] == 0 for row in cm) if cm and len(cm[0]) > 1 else True
+        )
+
+        degenerate = False
+        try:
+            _acceptance_guard(
+                {"predicts_only_bad": predicts_only_bad, "confusion_matrix": cm},
+                min_kept_pct=0.05,
+            )
+        except SystemExit:
+            degenerate = True
+
+        results[pval] = {
+            "n": int(metrics.get("n_test", 0) + metrics.get("n_train", 0) + metrics.get("n_val", 0)),
+            "class_balance": class_balance,
+            "good_prob_stats": {},
+            "precision": float(metrics.get("precision_macro", 0.0)),
+            "recall": float(metrics.get("recall_macro", 0.0)),
+            "confusion_matrix": cm,
+            "predicts_only_bad": predicts_only_bad,
+            "degenerate": degenerate,
+        }
+
+    out_path = out_dir / "path_d_filter_policy_sweep.json"
+    out_path.write_text(json.dumps(results, indent=2))
+    logging.info("Policy sweep written to %s", out_path)
+    return results
+
+
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     ap = argparse.ArgumentParser()
@@ -112,6 +168,8 @@ def main() -> int:
                     help="Downgrade acceptance guard from SystemExit to a warning")
     ap.add_argument("--audit-only", action="store_true",
                     help="Print sample counts for several harvest configs and exit.")
+    ap.add_argument("--label-policy-sweep", action="store_true",
+                    help="Train filter once per label policy and emit policy_sweep.json.")
     args = ap.parse_args()
 
     history = _load_history(Path(args.csv))
@@ -152,6 +210,13 @@ def main() -> int:
     if len(df) < 200:
         print("Not enough samples - aborting.")
         return 1
+
+    if args.label_policy_sweep:
+        print("Running label policy sweep...")
+        _run_label_policy_sweep(df, out_dir)
+        print("Sweep done. Artifacts:", sorted(p.name for p in out_dir.glob("path_d_*")))
+        return 0
+
     df.to_parquet(out_dir / "path_d_dataset.parquet")
 
     outcome_dist = df["outcome_class"].value_counts(normalize=True).to_dict()
