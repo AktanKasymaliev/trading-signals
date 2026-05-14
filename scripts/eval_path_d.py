@@ -34,7 +34,7 @@ from xau_pro_bot.models.trade_filter_model import TradeFilterModel
 from xau_pro_bot.signals.hybrid_policy import HybridThresholds
 
 
-THRESHOLDS = (0.50, 0.55, 0.60, 0.65, 0.70, 0.75)
+THRESHOLDS = (0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50, 0.55, 0.60)
 
 
 def _load(csv: Path) -> dict[str, pd.DataFrame]:
@@ -80,13 +80,21 @@ def tier_filter_result(r: BacktestResult, keep: set[str]) -> BacktestResult:
     return out
 
 
-def pick_best_threshold(sweep: dict[float, dict], min_kept: int) -> float | None:
-    eligible = {t: m for t, m in sweep.items() if m["kept"] >= min_kept}
-    if not eligible:
+def pick_best_threshold(sweep: dict[float, dict], *, min_kept: int) -> float | None:
+    """Return threshold with highest PF among entries where kept >= min_kept.
+
+    Tie-break by lower threshold value. If none qualify by min_kept, fall back
+    to the entry with the highest kept count. Returns None for empty sweep.
+    """
+    if not sweep:
         return None
-    return sorted(eligible.items(),
-                  key=lambda kv: (kv[1]["pf"], kv[1]["kept"]),
-                  reverse=True)[0][0]
+    eligible = {t: m for t, m in sweep.items() if m["kept"] >= min_kept}
+    pool = eligible if eligible else sweep
+    return sorted(
+        pool.items(),
+        key=lambda kv: (kv[1]["pf"], -kv[0]),
+        reverse=True,
+    )[0][0]
 
 
 
@@ -134,6 +142,9 @@ def run_all_modes(history, *, path_c_local: str | None,
                 "wr": float(r.win_rate),
                 "kept": int(r.signals_generated),
                 "blocked": int(r.blocked_signals),
+                "max_dd": float(r.max_drawdown),
+                "avg_rr": float(r.average_rr),
+                "per_tier": dict(r.per_tier),
             }
         chosen_threshold = pick_best_threshold(sweep, min_kept=min_kept)
         if chosen_threshold is not None:
@@ -190,11 +201,14 @@ def write_report(payload: dict, out_path: Path,
     ]
     sweep = payload["threshold_sweep"]
     if sweep:
-        lines.append("| threshold | kept | blocked | wr | expectancy | pf |")
-        lines.append("|---|---|---|---|---|---|")
+        lines.append("| th | kept | blocked | PF | Expectancy | WR | MaxDD | AvgRR |")
+        lines.append("|---|---|---|---|---|---|---|---|")
         for t, m in sorted(sweep.items()):
-            lines.append(f"| {t:.2f} | {m['kept']} | {m['blocked']} | "
-                         f"{m['wr']:.3f} | {m['expectancy']:.3f} | {m['pf']:.3f} |")
+            lines.append(
+                f"| {t:.2f} | {m['kept']} | {m['blocked']} | "
+                f"{m['pf']:.3f} | {m['expectancy']:.3f} | {m['wr']:.3f} | "
+                f"{m.get('max_dd', 0.0):.3f} | {m.get('avg_rr', 0.0):.3f} |"
+            )
     else:
         lines.append("_(no sweep — filter not provided)_")
     base_trades = res.get("A_baseline", {}).get("trades", 0)
