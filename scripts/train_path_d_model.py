@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import sys
 from pathlib import Path
 
 import pandas as pd
@@ -26,6 +27,44 @@ from xau_pro_bot.models.path_d_harvest import HarvestConfig, harvest_path_d_samp
 from xau_pro_bot.models.train_path_d import (
     save_model, train_directional, train_filter,
 )
+
+_AUDIT_CONFIGS = [
+    ("step_h1=4",          HarvestConfig(step_h1=4)),
+    ("step_h1=1",          HarvestConfig(step_h1=1)),
+    ("step_h1=1,step_m15=2", HarvestConfig(step_h1=1, step_m15=2)),
+]
+
+_OUTCOME_COLS = ["TP", "SL", "UNRESOLVED", "SAME_CANDLE_SL_FIRST"]
+
+
+def _run_audit(history: dict, configs: list) -> list[dict]:
+    """Return list of audit rows for the given configs. Pure function — no I/O."""
+    rows: list[dict] = []
+    for label, cfg in configs:
+        df = harvest_path_d_samples(history, cfg)
+        if df.empty:
+            rows.append({
+                "config": label,
+                "rows": 0,
+                "baseline": 0,
+                "synthetic": 0,
+                **{c: "0.0%" for c in _OUTCOME_COLS},
+            })
+            continue
+
+        total = len(df)
+        baseline = int(df["baseline_sample"].sum())
+        synthetic = int(df["is_synthetic"].sum())
+        vc = df["outcome_class"].value_counts()
+        pct = {c: f"{vc.get(c, 0) / total * 100:.1f}%" for c in _OUTCOME_COLS}
+        rows.append({
+            "config": label,
+            "rows": total,
+            "baseline": baseline,
+            "synthetic": synthetic,
+            **pct,
+        })
+    return rows
 
 
 def _acceptance_guard(metrics: dict, *, min_kept_pct: float = 0.05) -> None:
@@ -65,17 +104,45 @@ def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     ap = argparse.ArgumentParser()
     ap.add_argument("--csv", required=True)
-    ap.add_argument("--out-dir", required=True)
+    ap.add_argument("--out-dir", default=None)
     ap.add_argument("--step-h1", type=int, default=4)
     ap.add_argument("--timeout-m15", type=int, default=192)
     ap.add_argument("--synth-stride", type=int, default=8)
     ap.add_argument("--allow-degenerate", action="store_true", default=False,
                     help="Downgrade acceptance guard from SystemExit to a warning")
+    ap.add_argument("--audit-only", action="store_true",
+                    help="Print sample counts for several harvest configs and exit.")
     args = ap.parse_args()
 
-    out_dir = Path(args.out_dir); out_dir.mkdir(parents=True, exist_ok=True)
     history = _load_history(Path(args.csv))
     print(f"Loaded M15: {len(history['M15'])} bars")
+
+    if args.audit_only:
+        audit_rows = _run_audit(history, _AUDIT_CONFIGS)
+        # Header
+        col_w = 26
+        header = f"{'config':<{col_w}} {'rows':>7} {'baseline':>9} {'synthetic':>10}  " + \
+                 "  ".join(f"{c:>22}" for c in _OUTCOME_COLS)
+        print(header)
+        print("-" * len(header))
+        for r in audit_rows:
+            line = (
+                f"{r['config']:<{col_w}} {r['rows']:>7} {r['baseline']:>9} "
+                f"{r['synthetic']:>10}  " +
+                "  ".join(f"{r[c]:>22}" for c in _OUTCOME_COLS)
+            )
+            print(line)
+        print()
+        print("Dataset sources:")
+        print("  training source:           data_long_m15.csv (canonical)")
+        print("  robustness source:         data_xauusd_15m.csv (GC=F, DO NOT merge into training)")
+        print("  evaluation-only candidate: data_xauusd_m15.csv (~2025-07-21+, document only)")
+        sys.exit(0)
+
+    if args.out_dir is None:
+        ap.error("--out-dir is required unless --audit-only is set")
+
+    out_dir = Path(args.out_dir); out_dir.mkdir(parents=True, exist_ok=True)
 
     cfg = HarvestConfig(step_h1=args.step_h1, timeout_m15=args.timeout_m15,
                         include_synthetic=True, synth_stride=args.synth_stride)
