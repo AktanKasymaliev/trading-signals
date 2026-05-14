@@ -35,6 +35,7 @@ from xau_pro_bot.signals.hybrid_policy import HybridThresholds
 
 
 THRESHOLDS = (0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50, 0.55, 0.60)
+EXPECTED_R_THRESHOLDS = (0.00, 0.03, 0.05, 0.10, 0.15)
 
 
 def _load(csv: Path) -> dict[str, pd.DataFrame]:
@@ -108,6 +109,7 @@ def pick_best_threshold(sweep: dict[float, dict], *, min_kept: int) -> float | N
 def run_all_modes(history, *, path_c_local: str | None,
                   path_d_filter: str | None,
                   path_d_filter_calibrated: str | None = None,
+                  path_e: str | None = None,
                   val_split=(0.70, 0.85)) -> dict:
     h1 = history["H1"]
     n = len(h1)
@@ -211,10 +213,38 @@ def run_all_modes(history, *, path_c_local: str | None,
             results.setdefault("threshold_sweeps", {})["K_path_d_filter_calibrated"] = sweep_cal
             results.setdefault("chosen_thresholds", {})["K_path_d_filter_calibrated"] = float(chosen_cal)
 
+    # L Path E — expected-R filter; predicted_R sweep on validation, best applied to test
+    chosen_er = None
+    sweep_er: dict = {}
+    if path_e and Path(path_e).exists():
+        from xau_pro_bot.models.expected_r_filter_model import ExpectedRFilterModel
+        for t in EXPECTED_R_THRESHOLDS:
+            flt = ExpectedRFilterModel(local_path=path_e, threshold=float(t))
+            r = run_backtest(history, filter_model=flt,
+                             walk_from=t_val, walk_to=t_test, **base_kwargs)
+            sweep_er[t] = {
+                "pf": float(r.profit_factor),
+                "expectancy": float(r.expectancy),
+                "wr": float(r.win_rate),
+                "kept": int(r.signals_generated),
+                "blocked": int(r.blocked_signals),
+                "max_dd": float(r.max_drawdown),
+                "avg_rr": float(r.average_rr),
+            }
+        chosen_er = pick_best_threshold(sweep_er, min_kept=min_kept)
+        if chosen_er is not None:
+            flt = ExpectedRFilterModel(local_path=path_e,
+                                       threshold=float(chosen_er))
+            l_res = run_backtest(history, filter_model=flt,
+                                 walk_from=t_test, **base_kwargs)
+            results["L_path_e_expected_r"] = _result_summary(l_res)
+
     return {
         "results": results,
         "threshold_sweep": sweep,
         "chosen_threshold": chosen_threshold,
+        "expected_r_sweep": sweep_er,
+        "chosen_expected_r_threshold": chosen_er,
         "test_window": (str(t_test), str(h1.index[-1])),
         "val_window":  (str(t_val), str(t_test)),
     }
@@ -325,6 +355,8 @@ def main() -> int:
     ap.add_argument("--path-d-filter",
                      default="./models_cache/path_d_trade_outcome_lgb.joblib")
     ap.add_argument("--path-d-filter-calibrated", default=None)
+    ap.add_argument("--path-e", default=None,
+                    help="Path E expected_R joblib bundle.")
     ap.add_argument("--report", default="docs/reports/path_d_trade_outcome_results.md")
     ap.add_argument("--metrics-json", default="models_cache/path_d_metrics.json")
     args = ap.parse_args()
@@ -336,6 +368,7 @@ def main() -> int:
         path_c_local=args.path_c if Path(args.path_c).exists() else None,
         path_d_filter=args.path_d_filter if Path(args.path_d_filter).exists() else None,
         path_d_filter_calibrated=cal_path if cal_path and Path(cal_path).exists() else None,
+        path_e=args.path_e if args.path_e and Path(args.path_e).exists() else None,
     )
     write_report(payload, Path(args.report), Path(args.metrics_json))
     print(json.dumps(payload["results"], indent=2))
