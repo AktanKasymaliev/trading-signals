@@ -65,7 +65,9 @@ def _load_macro_csv(path: str | None) -> pd.Series | None:
 
 def _macro_features(series: pd.Series | None, cutoff,
                     *, prefix: str, kind: str) -> dict[str, float]:
-    """kind='ret' for pct returns, kind='chg' for absolute change.
+    """kind='ret' pct returns, kind='chg' absolute change at 1h/4h horizons.
+    kind='slope' linear-fit slope over last 20 H1 bars (one feature: <prefix>_slope).
+    kind='vol' stdev of pct returns over last 20 H1 bars (one feature: <prefix>_vol).
 
     Returns an empty dict when `series is None` so the caller does not emit the
     columns at all (preserves bit-identical behaviour for the no-CSV default).
@@ -74,6 +76,16 @@ def _macro_features(series: pd.Series | None, cutoff,
         return {}
     try:
         sub = series.loc[:cutoff]
+        if kind == "slope":
+            tail = sub.tail(20)
+            if len(tail) < 5:
+                return {f"{prefix}_slope": 0.0}
+            x = np.arange(len(tail), dtype=float)
+            slope, _ = np.polyfit(x, tail.astype(float).values, 1)
+            return {f"{prefix}_slope": float(slope)}
+        if kind == "vol":
+            tail = sub.pct_change().dropna().tail(20)
+            return {f"{prefix}_vol": float(tail.std()) if len(tail) else 0.0}
         if len(sub) < 5:
             return {f"{prefix}_1h": 0.0, f"{prefix}_4h": 0.0}
         last = float(sub.iloc[-1])
@@ -87,6 +99,10 @@ def _macro_features(series: pd.Series | None, cutoff,
             v4 = last - prev_4h
         return {f"{prefix}_1h": float(v1), f"{prefix}_4h": float(v4)}
     except Exception:
+        if kind == "slope":
+            return {f"{prefix}_slope": 0.0}
+        if kind == "vol":
+            return {f"{prefix}_vol": 0.0}
         return {f"{prefix}_1h": 0.0, f"{prefix}_4h": 0.0}
 
 
@@ -173,6 +189,9 @@ def harvest_path_d_samples(history: dict[str, pd.DataFrame],
         out: dict[str, float] = {}
         out.update(_macro_features(dxy_series, ts, prefix="dxy_ret", kind="ret"))
         out.update(_macro_features(us10y_series, ts, prefix="us10y_chg", kind="chg"))
+        out.update(_macro_features(dxy_series, ts, prefix="dxy_trend", kind="slope"))
+        out.update(_macro_features(dxy_series, ts, prefix="dxy", kind="vol"))
+        out.update(_macro_features(us10y_series, ts, prefix="us10y_trend", kind="slope"))
         return out
 
     rows: list[dict] = []

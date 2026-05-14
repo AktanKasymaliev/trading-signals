@@ -24,11 +24,38 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
 import pandas as pd
 
 from xau_pro_bot.backtest import BacktestResult, run_backtest
+
+
+def _check_macro_csvs(dxy_csv: str | None, us10y_csv: str | None) -> bool:
+    """Return True iff both macro CSVs are usable. Prints NO_MACRO_DATA on stderr
+    when not. Used by Path F L3_path_e_stationary_macro mode.
+
+    Contract: NEVER silently fall back; if macro CSVs are missing, the caller
+    skips the L3 row and surfaces the reason in the results table.
+    """
+    ok = True
+    if dxy_csv is None and us10y_csv is None:
+        print("NO_MACRO_DATA: no --dxy-csv / --us10y-csv supplied", file=sys.stderr)
+        return False
+    if dxy_csv and not Path(dxy_csv).exists():
+        print(f"NO_MACRO_DATA: dxy={dxy_csv} (file not found)", file=sys.stderr)
+        ok = False
+    if us10y_csv and not Path(us10y_csv).exists():
+        print(f"NO_MACRO_DATA: us10y={us10y_csv} (file not found)", file=sys.stderr)
+        ok = False
+    if dxy_csv is None:
+        print("NO_MACRO_DATA: --dxy-csv not supplied", file=sys.stderr)
+        ok = False
+    if us10y_csv is None:
+        print("NO_MACRO_DATA: --us10y-csv not supplied", file=sys.stderr)
+        ok = False
+    return ok
 from xau_pro_bot.models.hf_model import HFTradingModel
 from xau_pro_bot.models.trade_filter_model import TradeFilterModel
 from xau_pro_bot.signals.hybrid_policy import HybridThresholds
