@@ -25,6 +25,7 @@ def _default_params() -> dict[str, Any]:
         n_jobs=-1,
         verbose=-1,
         random_state=42,
+        importance_type="gain",
     )
 
 
