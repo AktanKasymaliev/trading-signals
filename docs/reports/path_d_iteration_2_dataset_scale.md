@@ -139,13 +139,15 @@ unreachable) as the practical comparison: PF = 0.716, expectancy = −0.116.
 ### Threshold sweep observation (uncalibrated filter, validation window)
 
 Per-threshold metrics are **identical across thresholds 0.20–0.60** in the eval sweep:
-all rows report PF=0.898, kept=414, blocked=14. This indicates the threshold gate inside
-`TradeFilterModel` is not actually re-binarising the GOOD probability per-threshold
-during the sweep — likely because `TradeFilterModel` consumes the model's hard
-`.predict()` output rather than re-thresholding `.predict_proba()`. Logged here as a
-**known iteration-2 reporting limitation**; it does not change the GO/NO-GO verdict
-because the final eval still runs a fresh backtest with the chosen threshold. Fix in
-iteration 3.
+all rows report PF=0.898, kept=414, blocked=14.
+
+**Corrected root cause (post-review):** `TradeFilterModel` *does* receive a fresh
+threshold per sweep iteration and re-thresholds `predict_proba` correctly. The identical
+rows are caused by the calibrated model's good-prob distribution being concentrated
+below all tested thresholds — at thr ≥ 0.20 the same trades pass/fail. For the
+uncalibrated model, the validation window happens to have few signals in the
+threshold-discriminating band. Code is correct; the metric is just flat in this regime.
+This does not change the GO/NO-GO verdict.
 
 ---
 
@@ -231,3 +233,43 @@ is more selectivity without enough lift to be useful.
 6. **Fix `tier_filter_result`** so filtered results carry `pnl_r` and `equity_curve`,
    not only `rr_values`. Today the `profit_factor`/`expectancy`/`max_dd` properties read
    zero for H/I/J tier baselines.
+
+---
+
+## Post-iteration Code Review Findings (2026-05-14)
+
+Recorded for iteration 3 — do not retro-fix in iteration 2.
+
+**CRITICAL — `train_filter_calibrated` has dead validation split.** The `va` slice
+returned by `split_time_70_15_15` is computed and then never used. `CalibratedClassifierCV`
+is constructed with `cv=3` (cross-validated fitting), so the base LightGBM is trained
+from scratch across folds without early stopping — likely overfits hard on small classes.
+Either switch to `cv="prefit"` with a pre-trained base + early stopping on `va`, or
+pass `va` as `eval_set` to the inner LightGBM via a callback. This plausibly explains
+the calibrated model's probability-mass collapse below 0.50.
+
+**HIGH — `--calibrate` silently overwrites existing artifacts.** Re-running with the
+same `--out-dir` clobbers `path_d_dataset.parquet`, all directional joblibs, and the
+filter joblibs with no content check. Add a `--force` flag or a timestamp suffix.
+
+**MEDIUM — `TP1_UNRESOLVED_BAD` and `TP2_UNRESOLVED_BAD` produce identical
+`label_filter` columns.** Both assign `(outcome_class == "TP").astype(int)`. The
+label-policy sweep table consequently shows redundant rows for these two policies.
+Either differentiate via `tp_used`/TP2 columns or remove the duplicate from
+`LabelPolicy`.
+
+**MEDIUM — `F_hybrid_normal_strong` aliases `F_hybrid_no_weak`** at the dict-assignment
+level. Identical-by-construction (both filter to NORMAL+STRONG). Cosmetic but
+misleading in reports; add an inline comment or compute it independently.
+
+**MEDIUM — `good_prob_stats` always written as `{}`** in
+`_run_label_policy_sweep`. The field is reserved but never populated; the sweep JSON
+exposes a stub. Wire the actual stats or drop the key.
+
+**LOW — `tests/test_train_audit_mode.py` is mostly shape-only.** Tests assert
+`rows >= 0`, `baseline >= 0` (tautological). No assertion that `baseline <= rows`, no
+test of the empty-df branch in `_run_audit`. Strengthen in iteration 3.
+
+**LOW — `_run_backtest`'s `.setdefault("rr", [])` on per_tier is redundant** because
+the dataclass `default_factory` already initialises the key. Harmless; remove for
+clarity.

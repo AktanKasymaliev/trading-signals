@@ -309,11 +309,23 @@ The isotonic-calibrated probability mass collapses below the 0.50 decision thres
 calibration is technically correct but operationally degenerate. The issue is structural:
 TP and SL trades look similar in feature space; a probability filter cannot separate them.
 
-**Iteration 3 follow-ups:**
-1. Wire Path E (Expected R regressor) into eval.
-2. Fix `TradeFilterModel` threshold semantics (sweep currently gives identical rows for
-   thr 0.20–0.60 — `.predict()` is likely used in place of re-thresholded `.predict_proba()`).
-3. Fix `tier_filter_result` to carry `pnl_r`/`equity_curve` (non-AI baselines currently
-   report 0 for PF/expectancy/max_dd).
-4. Wire DXY/US10Y macro features.
-5. Run `--label-policy-sweep` on `data_long_m15.csv` and rank policies.
+**Iteration 3 follow-ups (priority-ordered after post-iter code review):**
+1. **[CRITICAL]** Fix `train_filter_calibrated` — `va` split is computed and ignored;
+   `cv=3` fits without early stopping. Switch to `cv="prefit"` with a pre-fit base +
+   early stopping on `va`. Plausibly explains the calibrated model's probability-mass
+   collapse.
+2. **[HIGH]** Guard `--calibrate` against silent artifact clobber (`--force` or
+   timestamp suffix).
+3. **[MEDIUM]** `TP1_UNRESOLVED_BAD` and `TP2_UNRESOLVED_BAD` produce identical
+   `label_filter` — differentiate or remove the duplicate.
+4. **[MEDIUM]** `_run_label_policy_sweep` writes `good_prob_stats: {}` stub —
+   populate or drop the key.
+5. Wire Path E (Expected R regressor) into eval.
+6. Fix `tier_filter_result` to carry `pnl_r`/`equity_curve` (non-AI baselines
+   currently report 0 for PF/expectancy/max_dd).
+7. Wire DXY/US10Y macro features.
+
+> Note: the prior hypothesis "identical sweep rows = threshold not plumbed" was
+> incorrect. Code review confirmed `TradeFilterModel` re-thresholds `predict_proba`
+> per call; the real cause is the good-prob distribution being concentrated below
+> all tested thresholds.
