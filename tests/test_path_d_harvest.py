@@ -45,3 +45,23 @@ def test_same_candle_conflicts_are_counted(long_history):
     counts = df["outcome_class"].value_counts().to_dict()
     assert set(counts.keys()).issubset({"TP", "SL", "UNRESOLVED",
                                          "SAME_CANDLE_SL_FIRST"})
+
+
+REQUIRED_BASELINE_FEATURES = {
+    "bull_score", "bear_score", "score_gap", "final_score",
+    "tier_WEAK", "tier_NORMAL", "tier_STRONG", "tier_NO_SIGNAL",
+    "dir_BUY", "dir_SELL", "rr",
+    "hour_ny", "day_of_week",
+    "atr_percentile_h1", "range_vs_atr_m15",
+    "is_synthetic",
+    "kz_Asian_KZ", "kz_London_KZ", "kz_NY_AM_KZ", "kz_NY_PM_KZ", "kz_OFF",
+    "is_weak", "is_normal", "is_strong",
+}
+
+
+def test_harvest_emits_required_baseline_features(long_history):
+    df = harvest_path_d_samples(long_history, HarvestConfig(step_h1=4))
+    if df.empty:
+        return
+    missing = REQUIRED_BASELINE_FEATURES - set(df.columns)
+    assert not missing, f"missing baseline features: {missing}"

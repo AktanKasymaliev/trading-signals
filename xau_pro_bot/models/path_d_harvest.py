@@ -40,6 +40,13 @@ class HarvestConfig:
     min_lookback_h1: int = 250
     dedup_tol: float = 0.5
     label_policy: str = "tp1_unresolved_bad"
+    # Optional external macro series for DXY / US10Y features.
+    # Each CSV must have columns: timestamp (UTC), close.
+    # Feature wiring (dxy_ret_15m/1h/4h, us10y_chg_1h/4h) is deferred to
+    # iteration 3 — these fields are reserved here for backwards-compatible
+    # schema stability.
+    dxy_csv: str | None = None
+    us10y_csv: str | None = None
 
 
 _KILLZONES = ("Asian KZ", "London KZ", "NY AM KZ", "NY PM KZ", "OFF")
@@ -88,6 +95,9 @@ def _baseline_context_features(sig: dict, m15: pd.DataFrame,
         "day_of_week": float(ts.dayofweek),
         "atr_percentile_h1": atr_pct,
         "range_vs_atr_m15": range_vs_atr,
+        "is_weak":   int(tier == "WEAK"),
+        "is_normal": int(tier == "NORMAL"),
+        "is_strong": int(tier == "STRONG"),
         **_killzone_onehot(sig.get("killzone")),
     }
 
