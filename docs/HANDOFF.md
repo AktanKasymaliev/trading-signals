@@ -267,3 +267,53 @@ Built TP/SL outcome labeler, baseline-only sample harvester (with optional synth
 **Files added:** `xau_pro_bot/models/{trade_outcome,path_d_harvest,train_path_d,trade_filter_model}.py`, `xau_pro_bot/signals/hybrid_policy.py`, `scripts/{train_path_d_model,eval_path_d}.py`, `docs/superpowers/specs/2026-05-13-path-d-trade-outcome-design.md`, `docs/superpowers/plans/2026-05-13-path-d-trade-outcome.md`, `docs/reports/path_d_trade_outcome_results.md`, 7 new test files.
 
 **Commits:** `9deada9` → `7e5ae86` → `08d8842` → `e91d538` → `5dee0b6` → `53acb01` → `c1540ff` → `9fca8b7` → `f014982` → `27df0f6` → `37ea3c9` → `b797e4a` → `4ba35a4`.
+
+---
+
+## Iteration 2 — Dataset-scale re-evaluation (2026-05-14)
+
+**Branch:** `feature/hugging-face-ai-layer`
+**Plan:** `docs/superpowers/plans/2026-05-13-path-d-iteration-2.md`
+**Verdict report:** `docs/reports/path_d_iteration_2_dataset_scale.md`
+**Eval report:** `docs/reports/path_d_trade_outcome_results.md` (iteration-2 section appended)
+
+**Verdict: NO-GO on Path D filter.** Continue Path C; activate Path E (Expected R regressor).
+
+**What changed this iteration:**
+- Harvest cadence: step_h1=4 → step_h1=1 (357 → 8,797 baseline rows; 24× density).
+- Isotonic-calibrated filter wrapper (`CalibratedFilterWrapper`) + `--calibrate` flag.
+- 5 explicit label policies; UNRESOLVED never silently merged into BAD.
+- Acceptance guard rejects all-BAD or kept_pct<5% models.
+- Threshold sweep extended to 0.20–0.60.
+- Hybrid variants: default / no_weak / strong_only / normal_strong.
+- Per-tier rr accumulator in `run_backtest` → `tier_filter_result` carries `rr_values`.
+- Feature audit + tier-alias features (`is_weak`, `is_normal`, `is_strong`); DXY/US10Y stubs (off by default).
+- `--audit-only` and `--label-policy-sweep` modes in trainer.
+- Path E regressor stub at `xau_pro_bot/models/expected_r.py` (not wired into eval).
+- 40+ new tests; full suite 234 passed, 1 pre-existing skip.
+
+**Acceptance gates (test window 2024-11-18 → 2025-09-30):**
+
+| gate | result | pass |
+|---|---|---|
+| Kept ≥ 25% of A_baseline (97 trades) | E: 351; K_calibrated: 7 | E ✅ / K ❌ |
+| PF > 1.05 | E: 0.97; K: 4.48 (n=7) | ❌ |
+| Expectancy > 0 | E: −0.013; K: +0.50 (n=7) | ❌ |
+| Beats F_hybrid_no_weak | E (0.97 > 0.72) | ✅ |
+| Calibrated `good_prob.max>0.50` and not all-BAD | max=0.609, predicts_only_bad=False | ✅ (numerically) |
+| Calibrated kept_pct ≥ 5% | kept_pct=0.002 → degenerate | ❌ |
+
+**Why NO-GO:** baseline dataset edge is negative in this window (A_baseline PF=0.92,
+exp=−0.029). The classifier filter retains 90% of trades but barely lifts PF (0.92 → 0.97).
+The isotonic-calibrated probability mass collapses below the 0.50 decision threshold —
+calibration is technically correct but operationally degenerate. The issue is structural:
+TP and SL trades look similar in feature space; a probability filter cannot separate them.
+
+**Iteration 3 follow-ups:**
+1. Wire Path E (Expected R regressor) into eval.
+2. Fix `TradeFilterModel` threshold semantics (sweep currently gives identical rows for
+   thr 0.20–0.60 — `.predict()` is likely used in place of re-thresholded `.predict_proba()`).
+3. Fix `tier_filter_result` to carry `pnl_r`/`equity_curve` (non-AI baselines currently
+   report 0 for PF/expectancy/max_dd).
+4. Wire DXY/US10Y macro features.
+5. Run `--label-policy-sweep` on `data_long_m15.csv` and rank policies.
