@@ -26,7 +26,7 @@ import pandas as pd
 from xau_pro_bot.models.label_policy import LabelPolicy
 from xau_pro_bot.models.path_d_harvest import HarvestConfig, harvest_path_d_samples
 from xau_pro_bot.models.train_path_d import (
-    save_model, train_directional, train_filter,
+    save_model, train_directional, train_filter, train_filter_calibrated,
 )
 
 _AUDIT_CONFIGS = [
@@ -168,6 +168,8 @@ def main() -> int:
                     help="Downgrade acceptance guard from SystemExit to a warning")
     ap.add_argument("--audit-only", action="store_true",
                     help="Print sample counts for several harvest configs and exit.")
+    ap.add_argument("--calibrate", action="store_true",
+                    help="Also train an isotonic-calibrated filter and save it.")
     ap.add_argument("--label-policy-sweep", action="store_true",
                     help="Train filter once per label policy and emit policy_sweep.json.")
     args = ap.parse_args()
@@ -241,6 +243,20 @@ def main() -> int:
         else:
             raise
 
+    met_cal: dict | None = None
+    if args.calibrate:
+        print("Training Calibrated Filter...")
+        m_cal, met_cal = train_filter_calibrated(df)
+        save_model(m_cal, met_cal["feature_cols"],
+                   out_dir / "path_d_trade_outcome_calibrated.joblib")
+        try:
+            _acceptance_guard(met_cal)
+        except SystemExit as exc:
+            if args.allow_degenerate:
+                print(f"warning (calibrated): {exc}")
+            else:
+                raise
+
     metrics = {
         "outcome_distribution": outcome_dist,
         "directional_a1": {k: v for k, v in met_a1.items() if k not in ("report", "feature_cols")},
@@ -252,6 +268,12 @@ def main() -> int:
             "filter":         met_f["report"],
         },
     }
+    if met_cal is not None:
+        metrics["filter_calibrated"] = {
+            k: v for k, v in met_cal.items() if k not in ("report", "feature_cols")
+        }
+        if "report" in met_cal:
+            metrics["reports"]["filter_calibrated"] = met_cal["report"]
     (out_dir / "path_d_metrics.json").write_text(json.dumps(metrics, indent=2))
     print("Done. Artifacts:", sorted(p.name for p in out_dir.glob("path_d_*")))
     return 0
