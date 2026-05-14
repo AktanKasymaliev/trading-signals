@@ -33,19 +33,31 @@ def test_build_stationary_features_output_has_no_raw_price_columns():
     assert leaking == [], f"raw-price columns leaked from builder: {leaking}"
 
 
-@pytest.mark.parametrize("artifact_path", sorted(
-    Path("models_cache").glob("*stationary*.joblib"),
-))
+def _stationary_artifacts() -> list[Path]:
+    """Find any joblib artifact under models_cache/ whose bundle dict carries
+    feature_set='stationary'. Subdirs are scanned via rglob so multi-bundle
+    training output (e.g. models_cache/path_f_stationary/) is covered."""
+    matches: list[Path] = []
+    for p in sorted(Path("models_cache").rglob("*.joblib")):
+        try:
+            bundle = joblib.load(p)
+        except Exception:
+            continue
+        if isinstance(bundle, dict) and bundle.get("feature_set") == "stationary":
+            matches.append(p)
+    return matches
+
+
+@pytest.mark.parametrize("artifact_path", _stationary_artifacts() or [None])
 def test_stationary_model_artifacts_have_no_raw_price_features(artifact_path):
-    """Path F artifacts tagged 'stationary' must list only stationary
-    columns. Parametrization yields zero cases when no such artifact
-    exists yet — intended behaviour pre-training."""
+    """Every artifact tagged feature_set='stationary' must list only
+    stationary columns. Parametrization yields a single None case when no
+    such artifact exists yet — intended behaviour pre-training."""
+    if artifact_path is None:
+        pytest.skip("no stationary-tagged artifacts on disk yet")
     bundle = joblib.load(artifact_path)
     cols = bundle.get("feature_cols") or []
-    tag = bundle.get("feature_set", "legacy")
-    if tag != "stationary":
-        pytest.skip(f"artifact {artifact_path.name} tagged {tag!r}, not stationary")
     leaking = [c for c in cols if FORBIDDEN.match(c)]
     assert leaking == [], (
-        f"raw-price columns in {artifact_path.name}: {leaking}"
+        f"raw-price columns in {artifact_path}: {leaking}"
     )

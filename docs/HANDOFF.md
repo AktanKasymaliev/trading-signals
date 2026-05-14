@@ -57,6 +57,7 @@
 ## Recent events
 
 (append latest at the top)
+- **Path F landed (2026-05-15).** Commits `8ddd6e7` (picker veto + tier PF fix), `5a809c6` (stationary feature space + dispatch + artifact tagging), `f2535d5` (macro slope/vol + NO_MACRO_DATA contract), `22bd78b` (eval B2/L2/L3 wiring + engine dispatch + smoke). B2_path_c_stationary marginal GO (PF 1.051 / Exp +0.019 / 198 trades vs 76 floor); L2_path_e_stationary NO-GO on kept-trades floor (PF 1.699 / 52 < 76 trades); L3 skipped (NO_MACRO_DATA). Path C legacy stays as production fallback. Full verdict: `docs/reports/path_f_stationary_macro_results.md`.
 - **AI layer execution paused during Task 5 review.** Tasks AI-1 through AI-4 are implemented and review-approved. Task AI-5 is implemented and spec-approved, but code-quality review requested fixes before proceeding to formatter/backtest/docs.
 - **Codex takeover completed Tasks 23–24.** Finished router wiring in `bot.py`, persisted stream labels, added per-stream backtest support, and verified `python -c "from xau_pro_bot import bot; print('ok')"` plus `pytest -v` (88/88 passed).
 - **Tasks 0–16 complete.** Intraday baseline green: 64/64 tests pass. Module smoke OK. Ready for multi-stream phase (Tasks 17–24).
