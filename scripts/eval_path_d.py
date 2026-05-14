@@ -164,12 +164,25 @@ def run_all_modes(history, *, path_c_local: str | None,
                              walk_from=t_test, **base_kwargs)
             results["E_path_d_filter"] = _result_summary(e)
 
-            thr = HybridThresholds(weak=0.70, normal=float(chosen_threshold),
-                                   strong_block=0.80)
-            f = run_backtest(history, filter_model=flt,
-                             hybrid_thresholds=thr,
-                             walk_from=t_test, **base_kwargs)
-            results["F_hybrid"] = _result_summary(f)
+            thr_default = HybridThresholds(weak=0.70, normal=float(chosen_threshold), strong_block=0.80)
+            results["F_hybrid_default"] = _result_summary(run_backtest(
+                history, filter_model=flt, hybrid_thresholds=thr_default,
+                walk_from=t_test, **base_kwargs))
+
+            # WEAK never keeps: weak=2.0 is unreachable since good_prob ∈ [0,1]
+            thr_no_weak = HybridThresholds(weak=2.0, normal=float(chosen_threshold), strong_block=0.80)
+            results["F_hybrid_no_weak"] = _result_summary(run_backtest(
+                history, filter_model=flt, hybrid_thresholds=thr_no_weak,
+                walk_from=t_test, **base_kwargs))
+
+            # Only STRONG kept (NORMAL also blocked via unreachable threshold)
+            thr_strong_only = HybridThresholds(weak=2.0, normal=2.0, strong_block=0.80)
+            results["F_hybrid_strong_only"] = _result_summary(run_backtest(
+                history, filter_model=flt, hybrid_thresholds=thr_strong_only,
+                walk_from=t_test, **base_kwargs))
+
+            # NORMAL + STRONG only (same as no_weak by definition, but kept for clarity)
+            results["F_hybrid_normal_strong"] = results["F_hybrid_no_weak"]
 
     # K Path D filter calibrated — separate model, same sweep/selection logic
     if path_d_filter_calibrated and Path(path_d_filter_calibrated).exists():

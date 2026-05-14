@@ -64,3 +64,17 @@ def test_directional_low_confidence_does_not_block():
 def test_works_without_filter():
     assert decide("NORMAL", "BUY", None, None, T) == HybridDecision.KEEP
     assert decide("WEAK",   "BUY", None, None, T) == HybridDecision.KEEP
+
+
+def test_strong_kept_unless_bad_prob_above_80():
+    thr = HybridThresholds(weak=0.70, normal=0.55, strong_block=0.80)
+    keep = decide("STRONG", "BUY", None, {"good_prob": 0.10, "bad_prob": 0.79}, thr)
+    block = decide("STRONG", "BUY", None, {"good_prob": 0.05, "bad_prob": 0.85}, thr)
+    assert keep == HybridDecision.KEEP
+    assert block == HybridDecision.BLOCK
+
+
+def test_weak_requires_high_confidence():
+    thr = HybridThresholds(weak=0.70, normal=0.55, strong_block=0.80)
+    assert decide("WEAK", "BUY", None, {"good_prob": 0.69, "bad_prob": 0.31}, thr) == HybridDecision.BLOCK
+    assert decide("WEAK", "BUY", None, {"good_prob": 0.71, "bad_prob": 0.29}, thr) == HybridDecision.KEEP
