@@ -49,6 +49,41 @@ class HarvestConfig:
     us10y_csv: str | None = None
 
 
+def _load_macro_csv(path: str | None) -> pd.Series | None:
+    if path is None:
+        return None
+    df = pd.read_csv(path)
+    df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True, format="mixed")
+    return df.set_index("timestamp")["close"].sort_index()
+
+
+def _macro_features(series: pd.Series | None, cutoff,
+                    *, prefix: str, kind: str) -> dict[str, float]:
+    """kind='ret' for pct returns, kind='chg' for absolute change.
+
+    Returns an empty dict when `series is None` so the caller does not emit the
+    columns at all (preserves bit-identical behaviour for the no-CSV default).
+    """
+    if series is None:
+        return {}
+    try:
+        sub = series.loc[:cutoff]
+        if len(sub) < 5:
+            return {f"{prefix}_1h": 0.0, f"{prefix}_4h": 0.0}
+        last = float(sub.iloc[-1])
+        prev_1h = float(sub.iloc[-2])
+        prev_4h = float(sub.iloc[-5])
+        if kind == "ret":
+            v1 = (last / prev_1h) - 1.0 if prev_1h else 0.0
+            v4 = (last / prev_4h) - 1.0 if prev_4h else 0.0
+        else:  # 'chg'
+            v1 = last - prev_1h
+            v4 = last - prev_4h
+        return {f"{prefix}_1h": float(v1), f"{prefix}_4h": float(v4)}
+    except Exception:
+        return {f"{prefix}_1h": 0.0, f"{prefix}_4h": 0.0}
+
+
 _KILLZONES = ("Asian KZ", "London KZ", "NY AM KZ", "NY PM KZ", "OFF")
 
 
@@ -125,6 +160,15 @@ def harvest_path_d_samples(history: dict[str, pd.DataFrame],
         return pd.DataFrame()
 
     engine = MasterSignalEngine(ai_enabled=False)
+    dxy_series = _load_macro_csv(cfg.dxy_csv)
+    us10y_series = _load_macro_csv(cfg.us10y_csv)
+
+    def _macro_for(ts: object) -> dict[str, float]:
+        out: dict[str, float] = {}
+        out.update(_macro_features(dxy_series, ts, prefix="dxy_ret", kind="ret"))
+        out.update(_macro_features(us10y_series, ts, prefix="us10y_chg", kind="chg"))
+        return out
+
     rows: list[dict] = []
     step_count = 0
 
@@ -167,6 +211,7 @@ def harvest_path_d_samples(history: dict[str, pd.DataFrame],
                 continue
             rows.append({
                 **feats_29_row, **base_ctx,
+                **_macro_for(cutoff),
                 "is_synthetic": 0,
                 "baseline_sample": True,
                 "entry": float(sig["entry"]),
@@ -205,6 +250,7 @@ def harvest_path_d_samples(history: dict[str, pd.DataFrame],
                 synth_ctx["dir_SELL"] = int(direction == "SELL")
                 rows.append({
                     **feats_29_row, **synth_ctx,
+                    **_macro_for(cutoff),
                     "is_synthetic": 1,
                     "baseline_sample": False,
                     "entry": entry, "sl": sl, "tp_used": tp,
@@ -261,6 +307,7 @@ def harvest_path_d_samples(history: dict[str, pd.DataFrame],
                     continue
                 rows.append({
                     **feats_29_row, **base_ctx,
+                    **_macro_for(ts),
                     "is_synthetic": 0,
                     "baseline_sample": True,
                     "entry": float(sig["entry"]),
