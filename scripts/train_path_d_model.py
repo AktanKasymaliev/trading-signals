@@ -172,6 +172,12 @@ def main() -> int:
                     help="Also train an isotonic-calibrated filter and save it.")
     ap.add_argument("--label-policy-sweep", action="store_true",
                     help="Train filter once per label policy and emit policy_sweep.json.")
+    ap.add_argument("--expected-r", action="store_true",
+                    help="Also train a Path E expected_R regressor and save it.")
+    ap.add_argument("--dxy-csv", default=None,
+                    help="Optional DXY price CSV for macro features.")
+    ap.add_argument("--us10y-csv", default=None,
+                    help="Optional US10Y yield CSV for macro features.")
     args = ap.parse_args()
 
     history = _load_history(Path(args.csv))
@@ -205,7 +211,8 @@ def main() -> int:
     out_dir = Path(args.out_dir); out_dir.mkdir(parents=True, exist_ok=True)
 
     cfg = HarvestConfig(step_h1=args.step_h1, timeout_m15=args.timeout_m15,
-                        include_synthetic=True, synth_stride=args.synth_stride)
+                        include_synthetic=True, synth_stride=args.synth_stride,
+                        dxy_csv=args.dxy_csv, us10y_csv=args.us10y_csv)
     df = harvest_path_d_samples(history, cfg)
     print(f"Dataset: rows={len(df)}, baseline={int(df['baseline_sample'].sum())}, "
           f"synthetic={int(df['is_synthetic'].sum())}")
@@ -257,6 +264,14 @@ def main() -> int:
             else:
                 raise
 
+    met_er: dict | None = None
+    if args.expected_r:
+        print("Training Expected R regressor...")
+        from xau_pro_bot.models.expected_r import train_expected_r_regressor
+        m_er, met_er = train_expected_r_regressor(df)
+        save_model(m_er, met_er["feature_cols"],
+                   out_dir / "path_e_expected_r_lgb.joblib")
+
     metrics = {
         "outcome_distribution": outcome_dist,
         "directional_a1": {k: v for k, v in met_a1.items() if k not in ("report", "feature_cols")},
@@ -274,6 +289,10 @@ def main() -> int:
         }
         if "report" in met_cal:
             metrics["reports"]["filter_calibrated"] = met_cal["report"]
+    if met_er is not None:
+        metrics["expected_r"] = {
+            k: v for k, v in met_er.items() if k != "feature_cols"
+        }
     (out_dir / "path_d_metrics.json").write_text(json.dumps(metrics, indent=2))
     print("Done. Artifacts:", sorted(p.name for p in out_dir.glob("path_d_*")))
     return 0
