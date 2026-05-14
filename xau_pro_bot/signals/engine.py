@@ -288,16 +288,28 @@ class MasterSignalEngine:
             except Exception:
                 feats_29 = pd.DataFrame([{}])
             filter_pred = self.filter_model.predict(feats_29)
-            d = hybrid_decide(tier=tier, baseline_dir=direction,
-                              ai_directional=None,
-                              ai_filter=filter_pred,
-                              thresholds=self.hybrid_thresholds)
-            if d == HybridDecision.BLOCK:
-                tier = "NO_SIGNAL"
-                ai_fields = dict(ai_fields)
-                ai_fields["ai_blocked"] = True
-                ai_fields["ai_reason"] = (ai_fields.get("ai_reason") or
-                                           f"path_d_filter:{filter_pred.get('decision')}")
+            # Path E (expected-R) returns `predicted_r` instead of `good_prob`.
+            # Use its `decision` directly; hybrid thresholds don't apply here.
+            if "predicted_r" in filter_pred:
+                decision = filter_pred.get("decision")
+                decision_val = decision.value if hasattr(decision, "value") else str(decision)
+                if decision_val == "BLOCK":
+                    tier = "NO_SIGNAL"
+                    ai_fields = dict(ai_fields)
+                    ai_fields["ai_blocked"] = True
+                    ai_fields["ai_reason"] = (ai_fields.get("ai_reason") or
+                                               f"path_e_filter:{decision}")
+            else:
+                d = hybrid_decide(tier=tier, baseline_dir=direction,
+                                  ai_directional=None,
+                                  ai_filter=filter_pred,
+                                  thresholds=self.hybrid_thresholds)
+                if d == HybridDecision.BLOCK:
+                    tier = "NO_SIGNAL"
+                    ai_fields = dict(ai_fields)
+                    ai_fields["ai_blocked"] = True
+                    ai_fields["ai_reason"] = (ai_fields.get("ai_reason") or
+                                               f"path_d_filter:{filter_pred.get('decision')}")
 
         if tier == "NO_SIGNAL":
             return {
