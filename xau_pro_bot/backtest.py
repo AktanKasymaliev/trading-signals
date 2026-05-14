@@ -31,8 +31,8 @@ class BacktestResult:
     pnl_r: list[float] = field(default_factory=list)
     rr_values: list[float] = field(default_factory=list)
     equity_curve: list[float] = field(default_factory=list)
-    per_tier: dict[str, dict[str, int]] = field(
-        default_factory=lambda: {t: {"n": 0, "w": 0, "l": 0}
+    per_tier: dict[str, dict] = field(
+        default_factory=lambda: {t: {"n": 0, "w": 0, "l": 0, "rr": []}
                                   for t in ("STRONG", "NORMAL", "WEAK")})
 
     @property
@@ -185,10 +185,12 @@ def run_backtest(history: dict[str, pd.DataFrame],
             res.wins += 1
             res.per_tier[sig["tier"]]["n"] += 1
             res.per_tier[sig["tier"]]["w"] += 1
+            res.per_tier[sig["tier"]].setdefault("rr", []).append(float(r))
         elif outcome == "loss":
             res.losses += 1
             res.per_tier[sig["tier"]]["n"] += 1
             res.per_tier[sig["tier"]]["l"] += 1
+            res.per_tier[sig["tier"]].setdefault("rr", []).append(float(r))
         else:
             res.timeouts += 1
         res.pnl_r.append(r)
