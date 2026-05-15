@@ -28,6 +28,7 @@ class BacktestResult:
     losses: int = 0
     timeouts: int = 0
     blocked_signals: int = 0
+    blocked_details: list[dict] = field(default_factory=list)
     pnl_r: list[float] = field(default_factory=list)
     rr_values: list[float] = field(default_factory=list)
     equity_curve: list[float] = field(default_factory=list)
@@ -171,6 +172,15 @@ def run_backtest(history: dict[str, pd.DataFrame],
         if sig["tier"] == "NO_SIGNAL":
             if sig.get("ai_blocked"):
                 res.blocked_signals += 1
+                res.blocked_details.append({
+                    "ts": cutoff,
+                    "original_direction": sig.get("direction"),
+                    "tier_before_block": sig.get("ai_pre_block_tier") or "UNKNOWN",
+                    "ai_reason": sig.get("ai_reason_short") or sig.get("ai_reason"),
+                    "ai_action": sig.get("ai_action"),
+                    "ai_risk_label": sig.get("ai_risk_label"),
+                    "outcome_if_taken": None,  # levels not computed for blocked
+                })
             continue
         if sig.get("tp1") is None:
             continue

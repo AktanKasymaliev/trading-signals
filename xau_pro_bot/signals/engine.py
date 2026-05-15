@@ -14,6 +14,9 @@ from xau_pro_bot.indicators.ict import (
     find_fvg, find_order_blocks, find_liquidity, get_killzone,
 )
 from xau_pro_bot.indicators.sr_zones import find_sr_zones
+from xau_pro_bot.models.ai_explanation import (
+    derive_action, derive_risk_label, model_name, short_reason,
+)
 from xau_pro_bot.models.calibration import ai_prediction_to_adjustment
 from xau_pro_bot.models.features import build_ai_features
 from xau_pro_bot.models.features_stationary import build_stationary_features
@@ -186,6 +189,33 @@ class MasterSignalEngine:
             "ai_score_delta_sell": adjustment["score_delta_sell"],
         }
 
+    def _build_explanation(
+        self,
+        ai_fields: dict[str, Any],
+        deterministic_direction: str,
+        tier: str,
+        reasons: dict[str, list[str]],
+    ) -> dict[str, Any]:
+        ai_enabled = bool(ai_fields.get("ai_enabled"))
+        action = derive_action(
+            ai_enabled=ai_enabled,
+            ai_blocked=bool(ai_fields.get("ai_blocked")),
+            ai_direction=ai_fields.get("ai_direction"),
+            deterministic_direction=deterministic_direction,
+        )
+        risk_label = derive_risk_label(
+            tier=tier,
+            penalties=reasons.get("penalties") or [],
+            ai_action=action,
+        )
+        return {
+            "ai_model_name": model_name(self.ai_feature_set, ai_enabled),
+            "ai_feature_set": self.ai_feature_set if ai_enabled else None,
+            "ai_action": action,
+            "ai_reason_short": short_reason(ai_fields.get("ai_reason")),
+            "ai_risk_label": risk_label,
+        }
+
     def _compute_levels(self, direction: str, h1_df, m15_df, d1_df) -> dict[str, Any]:
         entry = float(m15_df["Close"].iloc[-1])
         atr_m15 = float(m15_df["ATR_14"].iloc[-1]) if "ATR_14" in m15_df else 1.0
@@ -303,7 +333,8 @@ class MasterSignalEngine:
             reasons["ai"] = [ai_fields["ai_reason"]]
 
         final_score = max(bull_score, bear_score)
-        tier = "NO_SIGNAL" if ai_fields["ai_blocked"] else self._tier(final_score)
+        pre_block_tier = self._tier(final_score)
+        tier = "NO_SIGNAL" if ai_fields["ai_blocked"] else pre_block_tier
 
         # Path D filter/hybrid gate (opt-in)
         if self.filter_model is not None and tier != "NO_SIGNAL":
@@ -339,6 +370,9 @@ class MasterSignalEngine:
                     ai_fields["ai_reason"] = (ai_fields.get("ai_reason") or
                                                f"path_d_filter:{filter_pred.get('decision')}")
 
+        explanation = self._build_explanation(ai_fields, direction, tier, reasons)
+        explanation["ai_pre_block_tier"] = pre_block_tier
+
         if tier == "NO_SIGNAL":
             return {
                 "direction": direction,
@@ -354,6 +388,7 @@ class MasterSignalEngine:
                 "tp2_unavailable": False,
                 "ts_utc": datetime.now(timezone.utc),
                 **ai_fields,
+                **explanation,
             }
 
         levels = self._compute_levels(direction, h1, m15, d1)
@@ -368,4 +403,5 @@ class MasterSignalEngine:
             "reasons": reasons,
             "ts_utc": datetime.now(timezone.utc),
             **ai_fields,
+            **explanation,
         }

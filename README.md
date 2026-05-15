@@ -81,18 +81,53 @@ By tier:
 
 AI is an optional confirmation/filter layer for the intraday deterministic engine. It can add score bonuses, apply conflict penalties, or block a signal when the model returns `NO_TRADE` with sufficient confidence. Swing and scalp streams remain deterministic.
 
+**Current production model:** Path C legacy (`AI_FEATURE_SET=internal`). Backtest on the hold-out window: PF 1.109, expectancy +0.041 R, win-rate 36.2%, 161 trades.
+
+**Status of other paths (do not promote):**
+
+- Path D / E — paused.
+- Path F stationary (`AI_FEATURE_SET=stationary`, B2 variant): marginal GO (PF 1.051, +0.019 R, 198 trades). Research candidate only.
+- Path E stationary (L2): NO-GO on kept-trades floor.
+
+**Intended use of the AI layer is analysis-assistant, not blind auto-trading.** Operators read the AI block to understand *why* a signal was kept/blocked/downgraded and decide manually.
+
 Environment variables:
 
 ```bash
 AI_ENABLED=false
+AI_EXPLAIN=false           # turn on the multi-line AI explanation block in Telegram output
 AI_MODEL_ID=
 AI_MODEL_TYPE=sklearn
 AI_MODEL_REVISION=
+AI_FEATURE_SET=internal    # 'internal' = Path C legacy; 'stationary' = Path F (research only)
 AI_MIN_CONFIDENCE=0.65
 AI_STRONG_CONFIDENCE=0.75
 AI_NO_TRADE_THRESHOLD=0.60
 AI_CACHE_DIR=./models_cache
 ```
+
+### Analysis-assistant mode (AI_EXPLAIN=true)
+
+When enabled, each signal includes a compact AI block:
+
+```text
+🧠 AI filter: KEEP
+Модель: Path C legacy
+Риск: MEDIUM
+Причина: направление совпадает, score gap нормальный, RR приемлемый
+```
+
+Fields attached to every signal dict (whether `AI_EXPLAIN` is on or off):
+
+- `ai_model_name` — human-readable name ("Path C legacy", "Path F stationary").
+- `ai_feature_set` — raw feature_set tag used (`internal` / `stationary` / `smc_v2`).
+- `ai_direction`, `ai_confidence` — raw model output.
+- `ai_action` — `KEEP` / `BLOCK` / `DOWNGRADE` / `None` (none = AI off or skipped).
+- `ai_reason_short` — trimmed reason for Telegram display.
+- `ai_risk_label` — `CLEAN_SETUP` / `MEDIUM_RISK` / `HIGH_RISK`.
+- `ai_pre_block_tier` — tier the signal would have had if AI hadn't blocked it.
+
+The backtester logs blocked signals into `BacktestResult.blocked_details` with `original_direction`, `tier_before_block`, `ai_reason`, `ai_action`, and `ai_risk_label` so blocks can be audited.
 
 Supported model types:
 

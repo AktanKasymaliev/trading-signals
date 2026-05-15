@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from xau_pro_bot import config
+
 
 KZ_FLAGS = {
     "London KZ": "🇬🇧",
@@ -30,6 +32,37 @@ def _tp2_line(sig: dict) -> str:
     return f" •  TP2: `{_fmt_price(sig['tp2'])}` ({abs(diff):.1f} pts) — ликвидность"
 
 
+_RISK_LABEL_RU = {
+    "HIGH_RISK": "HIGH",
+    "MEDIUM_RISK": "MEDIUM",
+    "CLEAN_SETUP": "CLEAN",
+}
+
+
+def _ai_explain_enabled() -> bool:
+    # Read live so tests/monkeypatch can flip the flag at runtime.
+    import os
+    return os.getenv("AI_EXPLAIN", "false").strip().lower() in {
+        "1", "true", "yes", "on",
+    } or getattr(config, "AI_EXPLAIN", False)
+
+
+def _ai_block(sig: dict) -> list[str]:
+    """Multi-line analysis-assistant AI block (AI_EXPLAIN=true)."""
+    if not sig.get("ai_enabled"):
+        return []
+    action = sig.get("ai_action") or "—"
+    model = sig.get("ai_model_name") or "AI"
+    risk = _RISK_LABEL_RU.get(sig.get("ai_risk_label") or "", "—")
+    reason = sig.get("ai_reason_short") or sig.get("ai_reason") or "—"
+    return [
+        f"🧠 AI filter: {action}",
+        f"Модель: {model}",
+        f"Риск: {risk}",
+        f"Причина: {reason}",
+    ]
+
+
 def _ai_line(sig: dict) -> str | None:
     if not sig.get("ai_enabled"):
         return None
@@ -38,6 +71,15 @@ def _ai_line(sig: dict) -> str | None:
     reason = sig.get("ai_reason") or "AI checked"
     conf_text = f"{float(confidence):.2f}" if confidence is not None else "0.00"
     return f"AI: {direction} {conf_text} confidence — {reason}"
+
+
+def _ai_section(sig: dict) -> list[str]:
+    if not sig.get("ai_enabled"):
+        return []
+    if _ai_explain_enabled():
+        return _ai_block(sig)
+    line = _ai_line(sig)
+    return [line] if line else []
 
 
 def _direction_header(sig: dict) -> str:
@@ -81,9 +123,7 @@ def format_strong_signal(sig: dict) -> str:
         parts.append(f"📐 Стратегия: {sig['strategy_label']}")
     if sig.get("horizon_label"):
         parts.append(f"⏳ Горизонт: {sig['horizon_label']}")
-    ai_line = _ai_line(sig)
-    if ai_line:
-        parts.append(ai_line)
+    parts.extend(_ai_section(sig))
     parts.extend([
         "━━━━━━━━━━━━━━━━━━━",
         _analysis_block(sig),
@@ -109,9 +149,7 @@ def format_weak_signal(sig: dict) -> str:
         parts.append(f"📐 Стратегия: {sig['strategy_label']}")
     if sig.get("horizon_label"):
         parts.append(f"⏳ Горизонт: {sig['horizon_label']}")
-    ai_line = _ai_line(sig)
-    if ai_line:
-        parts.append(ai_line)
+    parts.extend(_ai_section(sig))
     return "\n".join(parts)
 
 

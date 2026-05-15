@@ -83,6 +83,9 @@ STREAM_SCALP = "scalp"
 AI_ENABLED = os.getenv("AI_ENABLED", "false").strip().lower() in {
     "1", "true", "yes", "on",
 }
+AI_EXPLAIN = os.getenv("AI_EXPLAIN", "false").strip().lower() in {
+    "1", "true", "yes", "on",
+}
 AI_MODEL_ID = ""
 AI_MODEL_TYPE = "sklearn"
 AI_MIN_CONFIDENCE = 0.65
@@ -130,6 +133,7 @@ def load_ai_config() -> dict[str, str | bool | float | int]:
     """
     return {
         "enabled": _env_bool("AI_ENABLED", False),
+        "explain": _env_bool("AI_EXPLAIN", False),
         "model_id": os.getenv("AI_MODEL_ID", ""),
         "model_type": os.getenv("AI_MODEL_TYPE", "sklearn"),
         "min_confidence": _env_float("AI_MIN_CONFIDENCE", 0.65),
