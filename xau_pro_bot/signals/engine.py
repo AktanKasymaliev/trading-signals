@@ -14,13 +14,43 @@ from xau_pro_bot.indicators.ict import (
     find_fvg, find_order_blocks, find_liquidity, get_killzone,
 )
 from xau_pro_bot.indicators.sr_zones import find_sr_zones
+from xau_pro_bot.models.features import build_ai_features
+from xau_pro_bot.models.features_stationary import build_stationary_features
+from xau_pro_bot.signals.ai_gate import AIExplanationGate, prime_feature_set
+from xau_pro_bot.signals.hybrid_policy import (
+    HybridDecision, HybridThresholds, decide as hybrid_decide,
+)
 from xau_pro_bot.signals.ict_signals import score_ict
 from xau_pro_bot.signals.smc_signals import score_smc
 from xau_pro_bot.signals.classic_signals import score_classic
 
 
+_prime_feature_set = prime_feature_set  # back-compat alias for callers
+
+
 class MasterSignalEngine:
     """Aggregates all scoring layers and produces a structured signal."""
+
+    def __init__(
+        self,
+        ai_enabled: bool | None = None,
+        ai_model: Any | None = None,
+        filter_model: Any | None = None,
+        hybrid_thresholds: HybridThresholds | None = None,
+        gate: AIExplanationGate | None = None,
+    ) -> None:
+        # The AIExplanationGate owns model loading and feature dispatch so
+        # the same logic can be shared with swing/scalp analyzers via the
+        # StreamRouter. Engine still exposes ai_enabled/ai_model/ai_feature_set
+        # for backward compatibility with existing callers and tests.
+        self._gate = gate if gate is not None else AIExplanationGate(
+            ai_enabled=ai_enabled, ai_model=ai_model,
+        )
+        self.ai_enabled = self._gate.ai_enabled
+        self.ai_feature_set = self._gate.ai_feature_set
+        self.ai_model = self._gate.ai_model
+        self.filter_model = filter_model
+        self.hybrid_thresholds = hybrid_thresholds or HybridThresholds()
 
     @staticmethod
     def _tier(score: float) -> str:
@@ -76,6 +106,27 @@ class MasterSignalEngine:
         if direction == "SELL" and d1_bull:
             return 20.0, "D1 trend against SELL"
         return 0.0, None
+
+    def _disabled_ai_fields(self) -> dict[str, Any]:
+        return self._gate.disabled_fields()
+
+    def _run_ai_adjustment(
+        self,
+        data: dict[str, pd.DataFrame],
+        deterministic_direction: str,
+    ) -> dict[str, Any]:
+        return self._gate.evaluate(data, deterministic_direction)
+
+    def _build_explanation(
+        self,
+        ai_fields: dict[str, Any],
+        deterministic_direction: str,
+        tier: str,
+        reasons: dict[str, list[str]],
+    ) -> dict[str, Any]:
+        return self._gate.build_explanation(
+            ai_fields, deterministic_direction, tier, reasons,
+        )
 
     def _compute_levels(self, direction: str, h1_df, m15_df, d1_df) -> dict[str, Any]:
         entry = float(m15_df["Close"].iloc[-1])
@@ -179,9 +230,6 @@ class MasterSignalEngine:
         else:
             bear_score -= macro_pen
 
-        final_score = max(bull_score, bear_score)
-        tier = self._tier(final_score)
-
         reasons = {
             "macro": macro_reasons,
             "smc": smc_reasons,
@@ -190,11 +238,60 @@ class MasterSignalEngine:
             "penalties": [pen_reason] if pen_reason else [],
         }
 
+        ai_fields = self._run_ai_adjustment(data, direction)
+        bull_score += ai_fields["ai_score_delta_buy"]
+        bear_score += ai_fields["ai_score_delta_sell"]
+        if ai_fields["ai_reason"]:
+            reasons["ai"] = [ai_fields["ai_reason"]]
+
+        final_score = max(bull_score, bear_score)
+        pre_block_tier = self._tier(final_score)
+        tier = "NO_SIGNAL" if ai_fields["ai_blocked"] else pre_block_tier
+
+        # Path D filter/hybrid gate (opt-in)
+        if self.filter_model is not None and tier != "NO_SIGNAL":
+            try:
+                filter_fs = _prime_feature_set(self.filter_model)
+                if filter_fs == "stationary":
+                    feats_29, _complete = build_stationary_features(data)
+                else:
+                    feats_29, _complete = build_ai_features(data)
+            except Exception:
+                feats_29 = pd.DataFrame([{}])
+            filter_pred = self.filter_model.predict(feats_29)
+            # Path E (expected-R) returns `predicted_r` instead of `good_prob`.
+            # Use its `decision` directly; hybrid thresholds don't apply here.
+            if "predicted_r" in filter_pred:
+                decision = filter_pred.get("decision")
+                decision_val = decision.value if hasattr(decision, "value") else str(decision)
+                if decision_val == "BLOCK":
+                    tier = "NO_SIGNAL"
+                    ai_fields = dict(ai_fields)
+                    ai_fields["ai_blocked"] = True
+                    ai_fields["ai_reason"] = (ai_fields.get("ai_reason") or
+                                               f"path_e_filter:{decision}")
+            else:
+                d = hybrid_decide(tier=tier, baseline_dir=direction,
+                                  ai_directional=None,
+                                  ai_filter=filter_pred,
+                                  thresholds=self.hybrid_thresholds)
+                if d == HybridDecision.BLOCK:
+                    tier = "NO_SIGNAL"
+                    ai_fields = dict(ai_fields)
+                    ai_fields["ai_blocked"] = True
+                    ai_fields["ai_reason"] = (ai_fields.get("ai_reason") or
+                                               f"path_d_filter:{filter_pred.get('decision')}")
+
+        explanation = self._build_explanation(ai_fields, direction, tier, reasons)
+        explanation["ai_pre_block_tier"] = pre_block_tier
+
         if tier == "NO_SIGNAL":
             return {
                 "direction": direction,
                 "tier": tier,
                 "score": int(final_score),
+                "bull_score": float(bull_score),
+                "bear_score": float(bear_score),
                 "entry": float(m15["Close"].iloc[-1]),
                 "sl": None, "tp1": None, "tp2": None, "tp3": None,
                 "rr": None,
@@ -202,6 +299,8 @@ class MasterSignalEngine:
                 "reasons": reasons,
                 "tp2_unavailable": False,
                 "ts_utc": datetime.now(timezone.utc),
+                **ai_fields,
+                **explanation,
             }
 
         levels = self._compute_levels(direction, h1, m15, d1)
@@ -209,8 +308,12 @@ class MasterSignalEngine:
             "direction": direction,
             "tier": tier,
             "score": int(final_score),
+            "bull_score": float(bull_score),
+            "bear_score": float(bear_score),
             **levels,
             "killzone": get_killzone(),
             "reasons": reasons,
             "ts_utc": datetime.now(timezone.utc),
+            **ai_fields,
+            **explanation,
         }

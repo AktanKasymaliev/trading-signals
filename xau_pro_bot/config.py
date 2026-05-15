@@ -79,6 +79,84 @@ STREAM_INTRADAY = "intraday"
 STREAM_SWING = "swing"
 STREAM_SCALP = "scalp"
 
+# ── Optional AI confirmation layer ────────────────────
+AI_ENABLED = os.getenv("AI_ENABLED", "false").strip().lower() in {
+    "1", "true", "yes", "on",
+}
+AI_EXPLAIN = os.getenv("AI_EXPLAIN", "false").strip().lower() in {
+    "1", "true", "yes", "on",
+}
+AI_MODEL_ID = ""
+AI_MODEL_TYPE = "sklearn"
+AI_MIN_CONFIDENCE = 0.65
+AI_STRONG_CONFIDENCE = 0.75
+AI_NO_TRADE_THRESHOLD = 0.60
+AI_SCORE_BONUS = 8
+AI_STRONG_SCORE_BONUS = 12
+AI_CONFLICT_PENALTY = 10
+AI_CACHE_DIR = "./models_cache"
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    """Parse common env bool values."""
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return float(raw)
+    except ValueError as exc:
+        raise RuntimeError(f"Invalid float env var {name}: {raw!r}") from exc
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except ValueError as exc:
+        raise RuntimeError(f"Invalid int env var {name}: {raw!r}") from exc
+
+
+def load_ai_config() -> dict[str, str | bool | float | int]:
+    """Return current AI config using live env values.
+
+    Tests mutate env after module import, so this function reads os.environ
+    directly instead of returning only module-import constants.
+    """
+    return {
+        "enabled": _env_bool("AI_ENABLED", False),
+        "explain": _env_bool("AI_EXPLAIN", False),
+        "model_id": os.getenv("AI_MODEL_ID", ""),
+        "model_type": os.getenv("AI_MODEL_TYPE", "sklearn"),
+        "min_confidence": _env_float("AI_MIN_CONFIDENCE", 0.65),
+        "strong_confidence": _env_float("AI_STRONG_CONFIDENCE", 0.75),
+        "no_trade_threshold": _env_float("AI_NO_TRADE_THRESHOLD", 0.60),
+        "score_bonus": _env_int("AI_SCORE_BONUS", 8),
+        "strong_score_bonus": _env_int("AI_STRONG_SCORE_BONUS", 12),
+        "conflict_penalty": _env_int("AI_CONFLICT_PENALTY", 10),
+        "cache_dir": os.getenv("AI_CACHE_DIR", "./models_cache"),
+        "revision": os.getenv("AI_MODEL_REVISION", ""),
+        "model_filename": os.getenv("AI_MODEL_FILENAME", ""),
+        "feature_set": os.getenv("AI_FEATURE_SET", "internal"),
+        "local_path": os.getenv("AI_MODEL_LOCAL_PATH", ""),
+        "path_d_filter_path": os.getenv("AI_PATH_D_FILTER_PATH", ""),
+        "path_d_directional_path": os.getenv("AI_PATH_D_DIRECTIONAL_PATH", ""),
+        "hybrid_mode": os.getenv("AI_HYBRID_MODE", "off"),
+        "filter_threshold_weak":   _env_float("AI_FILTER_THRESHOLD_WEAK", 0.70),
+        "filter_threshold_normal": _env_float("AI_FILTER_THRESHOLD_NORMAL", 0.55),
+        "filter_threshold_strong_block": _env_float("AI_FILTER_THRESHOLD_STRONG_BLOCK", 0.80),
+        "filter_unresolved_policy": os.getenv("FILTER_UNRESOLVED_POLICY", "bad"),
+        "label_tp_target": os.getenv("LABEL_TP_TARGET", "tp1"),
+    }
+
 
 def load_env(required: Iterable[str]) -> dict[str, str]:
     """Load and validate required environment variables."""

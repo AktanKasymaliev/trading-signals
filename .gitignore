@@ -10,3 +10,7 @@ backtest_results.csv
 .pytest_cache/
 .DS_Store
 *.egg-info/
+
+# PoC: SMC v2 data and model cache (not source-controlled)
+data_xauusd_*.csv
+models_cache/

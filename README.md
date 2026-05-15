@@ -1,6 +1,8 @@
 # XAU Pro Bot
 
-Deterministic Telegram signal bot for XAU/USD using ICT, SMC, Wyckoff (soft bias), and classic TA confluence. No AI, no LLM, no broker execution.
+Deterministic Telegram signal bot for XAU/USD using ICT, SMC, Wyckoff (soft bias), and classic TA confluence. No broker execution.
+
+The bot can optionally run a Hugging Face AI confirmation layer after deterministic scoring. AI is disabled by default and is never required for local tests or Railway startup.
 
 After Revision 3 the bot is **multi-stream**: a single scan can emit up to three independent signals — `intraday`, `swing`, `scalp`.
 
@@ -24,6 +26,7 @@ source .venv/bin/activate
 pip install -r requirements-dev.txt
 cp .env.example .env
 # Fill TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, TWELVE_DATA_API_KEY
+# Optional AI remains disabled unless AI_ENABLED=true
 pytest
 python -m xau_pro_bot.bot
 ```
@@ -74,6 +77,76 @@ By tier:
 
 **Acceptance gate:** STRONG ≥ 45% win rate AND expectancy > 0. If not, hand-tune weights in `signals/{ict,smc,classic}_signals.py` and rerun.
 
+## Optional Hugging Face AI layer
+
+AI is an optional confirmation/filter layer for the intraday deterministic engine. It can add score bonuses, apply conflict penalties, or block a signal when the model returns `NO_TRADE` with sufficient confidence. Swing and scalp streams remain deterministic.
+
+**Current production model:** Path C legacy (`AI_FEATURE_SET=internal`). Backtest on the hold-out window: PF 1.109, expectancy +0.041 R, win-rate 36.2%, 161 trades.
+
+**Status of other paths (do not promote):**
+
+- Path D / E — paused.
+- Path F stationary (`AI_FEATURE_SET=stationary`, B2 variant): marginal GO (PF 1.051, +0.019 R, 198 trades). Research candidate only.
+- Path E stationary (L2): NO-GO on kept-trades floor.
+
+**Intended use of the AI layer is analysis-assistant, not blind auto-trading.** Operators read the AI block to understand *why* a signal was kept/blocked/downgraded and decide manually.
+
+Environment variables:
+
+```bash
+AI_ENABLED=false
+AI_EXPLAIN=false           # turn on the multi-line AI explanation block in Telegram output
+AI_MODEL_ID=
+AI_MODEL_TYPE=sklearn
+AI_MODEL_REVISION=
+AI_FEATURE_SET=internal    # 'internal' = Path C legacy; 'stationary' = Path F (research only)
+AI_MIN_CONFIDENCE=0.65
+AI_STRONG_CONFIDENCE=0.75
+AI_NO_TRADE_THRESHOLD=0.60
+AI_CACHE_DIR=./models_cache
+```
+
+### Analysis-assistant mode (AI_EXPLAIN=true)
+
+When enabled, each signal includes a compact AI block:
+
+```text
+🧠 AI filter: KEEP
+Модель: Path C legacy
+Риск: MEDIUM
+Причина: направление совпадает, score gap нормальный, RR приемлемый
+```
+
+Fields attached to every signal dict (whether `AI_EXPLAIN` is on or off):
+
+- `ai_model_name` — human-readable name ("Path C legacy", "Path F stationary").
+- `ai_feature_set` — raw feature_set tag used (`internal` / `stationary` / `smc_v2`).
+- `ai_direction`, `ai_confidence` — raw model output.
+- `ai_action` — `KEEP` / `BLOCK` / `DOWNGRADE` / `None` (none = AI off or skipped).
+- `ai_reason_short` — trimmed reason for Telegram display.
+- `ai_risk_label` — `CLEAN_SETUP` / `MEDIUM_RISK` / `HIGH_RISK`.
+- `ai_pre_block_tier` — tier the signal would have had if AI hadn't blocked it.
+
+The backtester logs blocked signals into `BacktestResult.blocked_details` with `original_direction`, `tier_before_block`, `ai_reason`, `ai_action`, and `ai_risk_label` so blocks can be audited.
+
+Supported model types:
+
+- `sklearn`: downloads a trusted Hugging Face artifact such as `model.joblib` or `model.pkl`. Requires `AI_MODEL_REVISION` set to the full 40-character commit SHA of the model repo — this pins the artifact to an immutable revision.
+- `transformers`: lazy optional mode; install `torch` and `transformers` yourself before enabling it.
+- `custom`: adapter seam for injected models in tests or future code.
+
+**Security warning:** sklearn `joblib` and `pickle` artifacts can execute arbitrary code during loading. Only use models from sources you trust, and always pin `AI_MODEL_REVISION` to a specific commit SHA you have audited.
+
+### Backtest comparison
+
+```bash
+python -m xau_pro_bot.backtest --csv history_h1.csv --compare-ai \
+    --ai-model-id owner/xau-model \
+    --ai-model-revision <40-char-commit-sha>
+```
+
+This runs the baseline deterministic backtest and the AI-enhanced version side-by-side and prints a delta summary (trade count, win-rate, expectancy, profit factor, blocked signals).
+
 ## Commands
 
 | Command   | Description                                |
@@ -108,6 +181,7 @@ By tier:
 - `state.py` — SQLite signals/dedup.
 - `indicators/` — feature extraction (one file per concept group).
 - `signals/engine.py` — 5-layer scoring (intraday stream).
+- `models/` — optional AI features, Hugging Face adapter, and calibration rules.
 - `signals/filters.py` — dedup, ATR-reprice, rate-limit.
 - `formatter.py` — Telegram Markdown.
 - `bot.py` — Telegram + AsyncIOScheduler.

@@ -60,3 +60,49 @@ def test_strong_signal_shows_strategy_and_horizon():
     text = format_strong_signal(sig)
     assert "Стратегия: Swing 500" in text
     assert "Горизонт: 2-7 дней" in text
+
+
+def test_strong_signal_shows_compact_ai_line_when_enabled(monkeypatch):
+    # Pin AI_EXPLAIN off so we exercise the legacy single-line path
+    # regardless of .env state.
+    from xau_pro_bot import config as _cfg
+    monkeypatch.delenv("AI_EXPLAIN", raising=False)
+    monkeypatch.setattr(_cfg, "AI_EXPLAIN", False, raising=False)
+
+    sig = _sig()
+    sig.update({
+        "ai_enabled": True,
+        "ai_direction": "BUY",
+        "ai_confidence": 0.72,
+        "ai_reason": "AI agrees with deterministic signal",
+        "ai_blocked": False,
+    })
+
+    text = format_strong_signal(sig)
+
+    assert "AI: BUY 0.72 confidence — AI agrees with deterministic signal" in text
+
+
+def test_weak_signal_shows_compact_ai_line_when_enabled(monkeypatch):
+    from xau_pro_bot import config as _cfg
+    monkeypatch.delenv("AI_EXPLAIN", raising=False)
+    monkeypatch.setattr(_cfg, "AI_EXPLAIN", False, raising=False)
+
+    sig = _sig()
+    sig.update({
+        "ai_enabled": True,
+        "ai_direction": "SELL",
+        "ai_confidence": 0.66,
+        "ai_reason": "AI conflicts with deterministic signal",
+        "ai_blocked": False,
+    })
+
+    text = format_weak_signal(sig)
+
+    assert "AI: SELL 0.66 confidence — AI conflicts with deterministic signal" in text
+
+
+def test_strong_signal_omits_ai_line_when_disabled():
+    sig = _sig()
+    text = format_strong_signal(sig)
+    assert "AI:" not in text

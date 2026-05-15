@@ -1,0 +1,367 @@
+"""Harvest training samples for Path D.
+
+Walks history H1-bar by H1-bar, asks baseline MasterSignalEngine for a
+setup, resolves the TP/SL outcome on M15 future bars, and optionally
+appends synthetic ATR-based NO_TRADE samples for Mode A2.
+
+The output is a flat DataFrame: one row per (cutoff, sample) with
+features + labels + outcome bookkeeping.
+"""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass
+from typing import Literal
+
+import numpy as np
+import pandas as pd
+
+from xau_pro_bot.models.features import build_ai_features
+from xau_pro_bot.models.features_stationary import build_stationary_features
+from xau_pro_bot.models.label_policy import apply_label_policy
+from xau_pro_bot.models.trade_outcome import (
+    OutcomeClass,
+    resolve_outcome_m15,
+)
+from xau_pro_bot.signals.engine import MasterSignalEngine
+
+log = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class HarvestConfig:
+    step_h1: int = 4
+    step_m15: int = 0          # 0 disables M15 cutoff harvesting
+    timeout_m15: int = 192
+    label_tp_target: str = "tp1"
+    include_synthetic: bool = False
+    synth_stride: int = 8
+    synth_atr_sl: float = 1.5
+    synth_rr: float = 2.0
+    min_lookback_h1: int = 250
+    dedup_tol: float = 0.5
+    label_policy: str = "tp1_unresolved_bad"
+    # Optional external macro series for DXY / US10Y features.
+    # Each CSV must have columns: timestamp (UTC), close.
+    # Feature wiring (dxy_ret_15m/1h/4h, us10y_chg_1h/4h) is deferred to
+    # iteration 3 — these fields are reserved here for backwards-compatible
+    # schema stability.
+    dxy_csv: str | None = None
+    us10y_csv: str | None = None
+    # Path F feature-set selector. "legacy" uses build_ai_features (29 cols
+    # including absolute price levels). "stationary" uses build_stationary_features
+    # (17 cols, all normalised — no absolute price levels).
+    feature_set: Literal["legacy", "stationary"] = "legacy"
+
+
+def _load_macro_csv(path: str | None) -> pd.Series | None:
+    if path is None:
+        return None
+    df = pd.read_csv(path)
+    df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True, format="mixed")
+    return df.set_index("timestamp")["close"].sort_index()
+
+
+def _macro_features(series: pd.Series | None, cutoff,
+                    *, prefix: str, kind: str) -> dict[str, float]:
+    """kind='ret' pct returns, kind='chg' absolute change at 1h/4h horizons.
+    kind='slope' linear-fit slope over last 20 H1 bars (one feature: <prefix>_slope).
+    kind='vol' stdev of pct returns over last 20 H1 bars (one feature: <prefix>_vol).
+
+    Returns an empty dict when `series is None` so the caller does not emit the
+    columns at all (preserves bit-identical behaviour for the no-CSV default).
+    """
+    if series is None:
+        return {}
+    try:
+        sub = series.loc[:cutoff]
+        if kind == "slope":
+            tail = sub.tail(20)
+            if len(tail) < 5:
+                return {f"{prefix}_slope": 0.0}
+            x = np.arange(len(tail), dtype=float)
+            slope, _ = np.polyfit(x, tail.astype(float).values, 1)
+            return {f"{prefix}_slope": float(slope)}
+        if kind == "vol":
+            tail = sub.pct_change().dropna().tail(20)
+            return {f"{prefix}_vol": float(tail.std()) if len(tail) else 0.0}
+        if len(sub) < 5:
+            return {f"{prefix}_1h": 0.0, f"{prefix}_4h": 0.0}
+        last = float(sub.iloc[-1])
+        prev_1h = float(sub.iloc[-2])
+        prev_4h = float(sub.iloc[-5])
+        if kind == "ret":
+            v1 = (last / prev_1h) - 1.0 if prev_1h else 0.0
+            v4 = (last / prev_4h) - 1.0 if prev_4h else 0.0
+        else:  # 'chg'
+            v1 = last - prev_1h
+            v4 = last - prev_4h
+        return {f"{prefix}_1h": float(v1), f"{prefix}_4h": float(v4)}
+    except Exception:
+        if kind == "slope":
+            return {f"{prefix}_slope": 0.0}
+        if kind == "vol":
+            return {f"{prefix}_vol": 0.0}
+        return {f"{prefix}_1h": 0.0, f"{prefix}_4h": 0.0}
+
+
+_KILLZONES = ("Asian KZ", "London KZ", "NY AM KZ", "NY PM KZ", "OFF")
+
+
+def _killzone_onehot(label: str | None) -> dict[str, int]:
+    label = label if label in _KILLZONES else "OFF"
+    return {f"kz_{k.replace(' ', '_')}": int(label == k) for k in _KILLZONES}
+
+
+def _atr(series: pd.DataFrame, n: int = 14) -> float:
+    high = series["High"]; low = series["Low"]; close = series["Close"]
+    tr = pd.concat([
+        (high - low),
+        (high - close.shift()).abs(),
+        (low - close.shift()).abs(),
+    ], axis=1).max(axis=1)
+    val = tr.rolling(n).mean().iloc[-1]
+    return float(val) if pd.notna(val) else 0.0
+
+
+def _baseline_context_features(sig: dict, m15: pd.DataFrame,
+                               h1: pd.DataFrame) -> dict:
+    bull = float(sig.get("bull_score", 0.0))
+    bear = float(sig.get("bear_score", 0.0))
+    tier = sig.get("tier", "NO_SIGNAL")
+    direction = sig.get("direction", "BUY")
+    atr_h1 = _atr(h1.tail(50))
+    atr_pct = float((h1["High"] - h1["Low"]).tail(100).rank(pct=True).iloc[-1])
+    range_m15 = float(m15["High"].iloc[-1] - m15["Low"].iloc[-1])
+    range_vs_atr = range_m15 / atr_h1 if atr_h1 > 0 else 0.0
+    ts = m15.index[-1].tz_convert("America/New_York")
+    return {
+        "bull_score": bull,
+        "bear_score": bear,
+        "score_gap": abs(bull - bear),
+        "final_score": float(sig.get("score", 0.0)),
+        "tier_WEAK":   int(tier == "WEAK"),
+        "tier_NORMAL": int(tier == "NORMAL"),
+        "tier_STRONG": int(tier == "STRONG"),
+        "tier_NO_SIGNAL": int(tier == "NO_SIGNAL"),
+        "dir_BUY":  int(direction == "BUY"),
+        "dir_SELL": int(direction == "SELL"),
+        "rr": float(sig.get("rr") or 0.0),
+        "hour_ny": float(ts.hour),
+        "day_of_week": float(ts.dayofweek),
+        "atr_percentile_h1": atr_pct,
+        "range_vs_atr_m15": range_vs_atr,
+        "is_weak":   int(tier == "WEAK"),
+        "is_normal": int(tier == "NORMAL"),
+        "is_strong": int(tier == "STRONG"),
+        **_killzone_onehot(sig.get("killzone")),
+    }
+
+
+def _directional_label(direction: str, outcome_class: OutcomeClass) -> int:
+    if outcome_class == OutcomeClass.TP:
+        return 1 if direction == "BUY" else -1
+    return 0
+
+
+def _filter_label(outcome_class: OutcomeClass,
+                  unresolved_policy: str = "bad") -> int:
+    if outcome_class == OutcomeClass.TP:
+        return 1
+    if outcome_class == OutcomeClass.UNRESOLVED:
+        return 0 if unresolved_policy == "bad" else 1
+    return 0
+
+
+def harvest_path_d_samples(history: dict[str, pd.DataFrame],
+                           cfg: HarvestConfig = HarvestConfig(),
+                           ) -> pd.DataFrame:
+    h1 = history["H1"]; m15 = history["M15"]
+    if len(h1) < cfg.min_lookback_h1:
+        return pd.DataFrame()
+
+    engine = MasterSignalEngine(ai_enabled=False)
+    dxy_series = _load_macro_csv(cfg.dxy_csv)
+    us10y_series = _load_macro_csv(cfg.us10y_csv)
+
+    def _macro_for(ts: object) -> dict[str, float]:
+        out: dict[str, float] = {}
+        out.update(_macro_features(dxy_series, ts, prefix="dxy_ret", kind="ret"))
+        out.update(_macro_features(us10y_series, ts, prefix="us10y_chg", kind="chg"))
+        out.update(_macro_features(dxy_series, ts, prefix="dxy_trend", kind="slope"))
+        out.update(_macro_features(dxy_series, ts, prefix="dxy", kind="vol"))
+        out.update(_macro_features(us10y_series, ts, prefix="us10y_trend", kind="slope"))
+        return out
+
+    rows: list[dict] = []
+    step_count = 0
+
+    for i in range(cfg.min_lookback_h1, len(h1) - 1, cfg.step_h1):
+        cutoff = h1.index[i]
+        slice_data = {tf: df.loc[:cutoff].tail(720) for tf, df in history.items()}
+        step_count += 1
+        try:
+            sig = engine.analyze(slice_data)
+        except Exception:
+            continue
+        if sig is None:
+            continue
+
+        m15_future = m15.loc[m15.index > cutoff]
+        if len(m15_future) < 10:
+            break
+
+        try:
+            if cfg.feature_set == "stationary":
+                feats_29, complete = build_stationary_features(slice_data)
+            else:
+                feats_29, complete = build_ai_features(slice_data)
+        except Exception:
+            continue
+        if not complete:
+            continue
+        feats_29_row = feats_29.iloc[0].to_dict()
+
+        base_ctx = _baseline_context_features(sig, slice_data["M15"], slice_data["H1"])
+
+        tier = sig.get("tier", "NO_SIGNAL")
+        tp = (sig.get("tp1") if cfg.label_tp_target == "tp1"
+              else (sig.get("tp2") or sig.get("tp1")))
+        if tier in {"WEAK", "NORMAL", "STRONG"} and tp is not None and sig.get("sl") is not None:
+            try:
+                out = resolve_outcome_m15(
+                    entry=float(sig["entry"]), sl=float(sig["sl"]),
+                    tp=float(tp), direction=str(sig["direction"]),
+                    m15_future=m15_future, timeout_bars=cfg.timeout_m15,
+                )
+            except ValueError:
+                continue
+            rows.append({
+                **feats_29_row, **base_ctx,
+                **_macro_for(cutoff),
+                "is_synthetic": 0,
+                "baseline_sample": True,
+                "entry": float(sig["entry"]),
+                "sl": float(sig["sl"]),
+                "tp_used": float(tp),
+                "direction": sig["direction"],
+                "tier": tier,
+                "outcome_class": out.outcome_class.value,
+                "final_R": out.final_R,
+                "mfe_R": out.mfe_R,
+                "mae_R": out.mae_R,
+                "bars_to_outcome": out.bars_to_outcome,
+                "label_directional": _directional_label(sig["direction"], out.outcome_class),
+                "label_filter": _filter_label(out.outcome_class),
+                "cutoff": cutoff,
+            })
+        if cfg.include_synthetic and (step_count % cfg.synth_stride == 0):
+            atr = _atr(slice_data["H1"].tail(50))
+            if atr <= 0:
+                continue
+            entry = float(slice_data["M15"]["Close"].iloc[-1])
+            for direction in ("BUY", "SELL"):
+                if direction == "BUY":
+                    sl = entry - cfg.synth_atr_sl * atr
+                    tp = entry + cfg.synth_atr_sl * cfg.synth_rr * atr
+                else:
+                    sl = entry + cfg.synth_atr_sl * atr
+                    tp = entry - cfg.synth_atr_sl * cfg.synth_rr * atr
+                try:
+                    out = resolve_outcome_m15(entry, sl, tp, direction,
+                                              m15_future, cfg.timeout_m15)
+                except ValueError:
+                    continue
+                synth_ctx = dict(base_ctx)
+                synth_ctx["dir_BUY"]  = int(direction == "BUY")
+                synth_ctx["dir_SELL"] = int(direction == "SELL")
+                rows.append({
+                    **feats_29_row, **synth_ctx,
+                    **_macro_for(cutoff),
+                    "is_synthetic": 1,
+                    "baseline_sample": False,
+                    "entry": entry, "sl": sl, "tp_used": tp,
+                    "direction": direction,
+                    "tier": "NO_SIGNAL",
+                    "outcome_class": out.outcome_class.value,
+                    "final_R": out.final_R,
+                    "mfe_R": out.mfe_R,
+                    "mae_R": out.mae_R,
+                    "bars_to_outcome": out.bars_to_outcome,
+                    "label_directional": _directional_label(direction, out.outcome_class),
+                    "label_filter": np.nan,
+                    "cutoff": cutoff,
+                })
+
+    if cfg.step_m15 > 0:
+        # Iterate M15 timestamps that fall strictly between two H1 cutoffs we sampled.
+        h1_set = set(h1.index)
+        for j in range(0, len(m15) - 1, cfg.step_m15):
+            ts = m15.index[j]
+            if ts in h1_set:
+                continue
+            if ts < h1.index[cfg.min_lookback_h1]:
+                continue
+            slice_data = {tf: df.loc[:ts].tail(720) for tf, df in history.items()}
+            try:
+                sig = engine.analyze(slice_data)
+            except Exception:
+                continue
+            if sig is None:
+                continue
+            m15_future = m15.loc[m15.index > ts]
+            if len(m15_future) < 10:
+                break
+            try:
+                if cfg.feature_set == "stationary":
+                    feats_29, complete = build_stationary_features(slice_data)
+                else:
+                    feats_29, complete = build_ai_features(slice_data)
+            except Exception:
+                continue
+            if not complete:
+                continue
+            feats_29_row = feats_29.iloc[0].to_dict()
+            base_ctx = _baseline_context_features(sig, slice_data["M15"], slice_data["H1"])
+            tier = sig.get("tier", "NO_SIGNAL")
+            tp = (sig.get("tp1") if cfg.label_tp_target == "tp1"
+                  else (sig.get("tp2") or sig.get("tp1")))
+            if tier in {"WEAK", "NORMAL", "STRONG"} and tp is not None and sig.get("sl") is not None:
+                try:
+                    out = resolve_outcome_m15(
+                        entry=float(sig["entry"]), sl=float(sig["sl"]),
+                        tp=float(tp), direction=str(sig["direction"]),
+                        m15_future=m15_future, timeout_bars=cfg.timeout_m15,
+                    )
+                except ValueError:
+                    continue
+                rows.append({
+                    **feats_29_row, **base_ctx,
+                    **_macro_for(ts),
+                    "is_synthetic": 0,
+                    "baseline_sample": True,
+                    "entry": float(sig["entry"]),
+                    "sl": float(sig["sl"]),
+                    "tp_used": float(tp),
+                    "direction": sig["direction"],
+                    "tier": tier,
+                    "outcome_class": out.outcome_class.value,
+                    "final_R": out.final_R,
+                    "mfe_R": out.mfe_R,
+                    "mae_R": out.mae_R,
+                    "bars_to_outcome": out.bars_to_outcome,
+                    "label_directional": _directional_label(sig["direction"], out.outcome_class),
+                    "label_filter": _filter_label(out.outcome_class),
+                    "cutoff": ts,
+                })
+
+    if not rows:
+        return pd.DataFrame()
+    df = pd.DataFrame(rows).set_index("cutoff").sort_index()
+    if cfg.step_m15 > 0:
+        from xau_pro_bot.models.dedup import dedup_near_identical
+        df = dedup_near_identical(df, tol=cfg.dedup_tol)
+    if cfg.label_policy != "tp1_unresolved_bad":
+        df = apply_label_policy(df, cfg.label_policy)
+    return df
