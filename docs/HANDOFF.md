@@ -77,11 +77,11 @@ Goal: add an optional Hugging Face AI confirmation/filter layer for intraday det
 | AI-2 | Deterministic AI feature builder | done | `977805a` |
 | AI-3 | AI calibration rules | done | `db874b4`, `e1d8890` |
 | AI-4 | Hugging Face model adapter | done | `f40a599`, `edd53d7`, `9f6b57d`, `bc5391a` |
-| AI-5 | Integrate AI into `MasterSignalEngine` | in_progress | `c7b42b5`, `43f4e5f`; spec-approved, quality review has open fixes |
-| AI-6 | Formatter compact AI line | pending | Not started |
-| AI-7 | Backtest baseline vs AI comparison | pending | Not started |
-| AI-8 | README AI documentation | pending | Not started |
-| AI-9 | Final verification/regression fixes | pending | Not started |
+| AI-5 | Integrate AI into `MasterSignalEngine` | done | `c7b42b5`, `43f4e5f`, `7c2d36a` (explanation fields) |
+| AI-6 | Formatter AI explanation block | done | `7c2d36a` — `AI_EXPLAIN=true` emits compact 4-line block; legacy single line preserved when off |
+| AI-7 | Backtest blocked_details / compare diagnostics | done | `7c2d36a` — `BacktestResult.blocked_details` records original_direction, tier_before_block, ai_reason, ai_action, ai_risk_label |
+| AI-8 | README AI documentation | done | `7c2d36a` — Path C legacy = current production; Path F stationary = research only; AI_EXPLAIN documented |
+| AI-9 | Final verification/regression fixes | done | Full suite green: 296 passed, 3 skipped (2026-05-15) |
 
 ### AI Tasks Completed
 
