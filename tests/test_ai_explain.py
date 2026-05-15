@@ -165,7 +165,9 @@ def test_formatter_shows_ai_block_when_explain_true(monkeypatch):
 
 
 def test_formatter_hides_ai_block_when_explain_false(monkeypatch):
+    from xau_pro_bot import config as _cfg
     monkeypatch.delenv("AI_EXPLAIN", raising=False)
+    monkeypatch.setattr(_cfg, "AI_EXPLAIN", False, raising=False)
     text = format_strong_signal(_base_sig())
     # No rich block when flag is off
     assert "🧠 AI filter:" not in text
@@ -174,7 +176,9 @@ def test_formatter_hides_ai_block_when_explain_false(monkeypatch):
 
 def test_formatter_legacy_ai_line_remains_when_explain_false(monkeypatch):
     """Backward compat: existing single-line AI output still emitted."""
+    from xau_pro_bot import config as _cfg
     monkeypatch.delenv("AI_EXPLAIN", raising=False)
+    monkeypatch.setattr(_cfg, "AI_EXPLAIN", False, raising=False)
     text = format_strong_signal(_base_sig())
     assert "AI: BUY 0.71 confidence" in text
 
@@ -282,3 +286,177 @@ def test_backtest_records_blocked_detail_entry():
     assert detail["ai_action"] == "BLOCK"
     assert detail["ai_risk_label"] == "HIGH_RISK"
     assert detail["outcome_if_taken"] is None
+
+
+# ── swing / scalp analyzers receive AI gate ──────────────────────────
+
+
+class _KeepGate:
+    """Test double mimicking AIExplanationGate that always KEEPs."""
+
+    ai_feature_set = "internal"
+
+    def enrich(self, sig, data):
+        return {
+            **sig,
+            "ai_enabled": True,
+            "ai_direction": sig["direction"],
+            "ai_confidence": 0.71,
+            "ai_reason": "AI agrees with deterministic signal",
+            "ai_blocked": False,
+            "ai_score_delta_buy": 0,
+            "ai_score_delta_sell": 0,
+            "ai_action": "KEEP",
+            "ai_model_name": "Path C legacy",
+            "ai_feature_set": "internal",
+            "ai_risk_label": "CLEAN_SETUP",
+            "ai_reason_short": "AI agrees",
+        }
+
+
+class _BlockGate:
+    """Test double mimicking AIExplanationGate that always BLOCKs."""
+
+    ai_feature_set = "internal"
+
+    def enrich(self, sig, data):
+        return {
+            **sig,
+            "ai_enabled": True,
+            "ai_direction": "NO_TRADE",
+            "ai_confidence": 0.2,
+            "ai_reason": "AI conflicts: confidence too low",
+            "ai_blocked": True,
+            "ai_score_delta_buy": 0,
+            "ai_score_delta_sell": 0,
+            "ai_action": "BLOCK",
+            "ai_model_name": "Path C legacy",
+            "ai_feature_set": "internal",
+            "ai_risk_label": "HIGH_RISK",
+            "ai_reason_short": "AI conflicts",
+        }
+
+
+def _stub_swing_setup(monkeypatch):
+    monkeypatch.setattr(
+        "xau_pro_bot.signals.swing_analyzer.find_swing_setup",
+        lambda d1_df, h4_df: {
+            "direction": "BUY", "entry": 3300.0, "sl": 3290.0, "tp": 3320.0,
+            "rr": 2.0, "type": "1000pip", "range_pips": 1000,
+        },
+    )
+
+
+def _stub_scalp_signal(monkeypatch):
+    monkeypatch.setattr(
+        "xau_pro_bot.signals.scalp_analyzer.scalp_signal",
+        lambda m15_df, h1_df, h4_df: {
+            "direction": "BUY", "entry": 3300.0, "sl": 3290.0,
+            "tp1": 3320.0, "tp2": 3340.0, "killzone": "London KZ",
+            "counter_trend": False, "atr_m15": 1.0,
+            "conditions_met": ["RSI bounce"],
+        },
+    )
+
+
+def test_swing_analyzer_enriches_signal_via_gate(monkeypatch):
+    from xau_pro_bot.signals.swing_analyzer import SwingAnalyzer
+
+    _stub_swing_setup(monkeypatch)
+    sa = SwingAnalyzer(gate=_KeepGate())
+    sig = sa.analyze({"D1": None, "H4": None})
+
+    assert sig is not None
+    assert sig["ai_enabled"] is True
+    assert sig["ai_action"] == "KEEP"
+    assert sig["ai_model_name"] == "Path C legacy"
+    assert sig["ai_risk_label"] == "CLEAN_SETUP"
+
+
+def test_swing_analyzer_drops_signal_when_ai_blocks(monkeypatch):
+    from xau_pro_bot.signals.swing_analyzer import SwingAnalyzer
+
+    _stub_swing_setup(monkeypatch)
+    sa = SwingAnalyzer(gate=_BlockGate())
+    assert sa.analyze({"D1": None, "H4": None}) is None
+
+
+def test_swing_analyzer_without_gate_keeps_old_behavior(monkeypatch):
+    from xau_pro_bot.signals.swing_analyzer import SwingAnalyzer
+
+    _stub_swing_setup(monkeypatch)
+    sa = SwingAnalyzer()
+    sig = sa.analyze({"D1": None, "H4": None})
+    assert sig is not None
+    assert "ai_enabled" not in sig
+
+
+def test_scalp_analyzer_enriches_signal_via_gate(monkeypatch):
+    from xau_pro_bot.signals.scalp_analyzer import ScalpAnalyzer
+
+    _stub_scalp_signal(monkeypatch)
+    sa = ScalpAnalyzer(gate=_KeepGate())
+    sig = sa.analyze({"M15": None, "H1": None, "H4": None})
+
+    assert sig is not None
+    assert sig["ai_enabled"] is True
+    assert sig["ai_action"] == "KEEP"
+    assert sig["ai_model_name"] == "Path C legacy"
+
+
+def test_scalp_analyzer_drops_signal_when_ai_blocks(monkeypatch):
+    from xau_pro_bot.signals.scalp_analyzer import ScalpAnalyzer
+
+    _stub_scalp_signal(monkeypatch)
+    sa = ScalpAnalyzer(gate=_BlockGate())
+    assert sa.analyze({"M15": None, "H1": None, "H4": None}) is None
+
+
+def test_formatter_renders_ai_block_for_swing_style_signal(monkeypatch):
+    """Swing signals (no killzone, score=80) must render AI block when
+    enriched and AI_EXPLAIN=true. Guards against the analysis-assistant
+    block being intraday-only."""
+    monkeypatch.setenv("AI_EXPLAIN", "true")
+    sig = _base_sig(
+        killzone=None,
+        strategy_label="Swing 1000",
+        horizon_label="1-4 недели",
+        reasons={"swing": ["1000pip setup, range 1000 pips"],
+                 "macro": [], "smc": [], "ict": [],
+                 "classic": [], "penalties": []},
+    )
+    text = format_strong_signal(sig)
+    assert "🧠 AI filter: KEEP" in text
+    assert "Модель: Path C legacy" in text
+    assert "Риск: CLEAN" in text
+
+
+def test_ai_gate_evaluate_returns_disabled_fields_when_off():
+    from xau_pro_bot.signals.ai_gate import AIExplanationGate
+
+    gate = AIExplanationGate(ai_enabled=False)
+    out = gate.evaluate({}, "BUY")
+    assert out["ai_enabled"] is False
+    assert out["ai_direction"] is None
+    assert out["ai_blocked"] is False
+
+
+def test_ai_gate_enrich_merges_explanation_into_sig():
+    """When disabled, enrich still adds explanation keys with neutral
+    values so downstream code (formatter, backtest) gets a uniform
+    shape regardless of analyzer."""
+    from xau_pro_bot.signals.ai_gate import AIExplanationGate
+
+    gate = AIExplanationGate(ai_enabled=False)
+    sig_in = {
+        "direction": "BUY", "tier": "STRONG", "score": 80,
+        "reasons": {"penalties": []},
+    }
+    sig_out = gate.enrich(sig_in, {})
+    assert sig_out["ai_enabled"] is False
+    assert sig_out["ai_action"] is None
+    assert sig_out["ai_model_name"] is None
+    assert sig_out["ai_risk_label"] == "CLEAN_SETUP"
+    # original keys preserved
+    assert sig_out["direction"] == "BUY"
+    assert sig_out["tier"] == "STRONG"

@@ -14,14 +14,9 @@ from xau_pro_bot.indicators.ict import (
     find_fvg, find_order_blocks, find_liquidity, get_killzone,
 )
 from xau_pro_bot.indicators.sr_zones import find_sr_zones
-from xau_pro_bot.models.ai_explanation import (
-    derive_action, derive_risk_label, model_name, short_reason,
-)
-from xau_pro_bot.models.calibration import ai_prediction_to_adjustment
 from xau_pro_bot.models.features import build_ai_features
 from xau_pro_bot.models.features_stationary import build_stationary_features
-from xau_pro_bot.models.smc_v2_features import build_smc_v2_features
-from xau_pro_bot.models.hf_model import HFTradingModel
+from xau_pro_bot.signals.ai_gate import AIExplanationGate, prime_feature_set
 from xau_pro_bot.signals.hybrid_policy import (
     HybridDecision, HybridThresholds, decide as hybrid_decide,
 )
@@ -30,24 +25,7 @@ from xau_pro_bot.signals.smc_signals import score_smc
 from xau_pro_bot.signals.classic_signals import score_classic
 
 
-def _prime_feature_set(model: Any) -> str:
-    """Eagerly load the model bundle (if needed) and return its tagged
-    feature_set, defaulting to 'legacy'. Used so Path F artifacts trigger
-    the matching feature builder at inference time."""
-    if model is None:
-        return "legacy"
-    fs = getattr(model, "feature_set", None)
-    if fs:
-        return str(fs)
-    for loader in ("_load", "_get_model", "_load_sklearn"):
-        fn = getattr(model, loader, None)
-        if callable(fn):
-            try:
-                fn()
-            except Exception:
-                pass
-            break
-    return str(getattr(model, "feature_set", "legacy") or "legacy")
+_prime_feature_set = prime_feature_set  # back-compat alias for callers
 
 
 class MasterSignalEngine:
@@ -59,23 +37,18 @@ class MasterSignalEngine:
         ai_model: Any | None = None,
         filter_model: Any | None = None,
         hybrid_thresholds: HybridThresholds | None = None,
+        gate: AIExplanationGate | None = None,
     ) -> None:
-        # HFTradingModel is created once per engine instance. The adapter lazy-loads
-        # the underlying model on first predict() and caches it, so subsequent
-        # analyze() calls on the same engine reuse the loaded model.
-        ai_cfg = config.load_ai_config()
-        self.ai_enabled = bool(ai_cfg["enabled"] if ai_enabled is None else ai_enabled)
-        self.ai_feature_set = str(ai_cfg.get("feature_set", "internal"))
-        self.ai_model = ai_model
-        if self.ai_enabled and self.ai_model is None:
-            self.ai_model = HFTradingModel(
-                model_id=str(ai_cfg["model_id"]),
-                model_type=str(ai_cfg["model_type"]),
-                cache_dir=str(ai_cfg["cache_dir"]),
-                revision=str(ai_cfg["revision"]),
-                filename=str(ai_cfg["model_filename"]),
-                local_path=str(ai_cfg["local_path"]),
-            )
+        # The AIExplanationGate owns model loading and feature dispatch so
+        # the same logic can be shared with swing/scalp analyzers via the
+        # StreamRouter. Engine still exposes ai_enabled/ai_model/ai_feature_set
+        # for backward compatibility with existing callers and tests.
+        self._gate = gate if gate is not None else AIExplanationGate(
+            ai_enabled=ai_enabled, ai_model=ai_model,
+        )
+        self.ai_enabled = self._gate.ai_enabled
+        self.ai_feature_set = self._gate.ai_feature_set
+        self.ai_model = self._gate.ai_model
         self.filter_model = filter_model
         self.hybrid_thresholds = hybrid_thresholds or HybridThresholds()
 
@@ -135,59 +108,14 @@ class MasterSignalEngine:
         return 0.0, None
 
     def _disabled_ai_fields(self) -> dict[str, Any]:
-        return {
-            "ai_enabled": False,
-            "ai_direction": None,
-            "ai_confidence": None,
-            "ai_reason": None,
-            "ai_blocked": False,
-            "ai_score_delta_buy": 0,
-            "ai_score_delta_sell": 0,
-        }
+        return self._gate.disabled_fields()
 
     def _run_ai_adjustment(
         self,
         data: dict[str, pd.DataFrame],
         deterministic_direction: str,
     ) -> dict[str, Any]:
-        if not self.ai_enabled:
-            return self._disabled_ai_fields()
-
-        if self.ai_model is None:
-            prediction: dict[str, Any] = {
-                "direction": "NO_TRADE",
-                "confidence": 0.0,
-            }
-        else:
-            model_fs = _prime_feature_set(self.ai_model)
-            if model_fs == "stationary":
-                features, complete = build_stationary_features(data)
-            elif self.ai_feature_set == "smc_v2":
-                features, complete = build_smc_v2_features(data)
-            else:
-                features, complete = build_ai_features(data)
-            if not complete:
-                return {
-                    "ai_enabled": True,
-                    "ai_direction": None,
-                    "ai_confidence": None,
-                    "ai_reason": "AI skipped: incomplete input features",
-                    "ai_blocked": False,
-                    "ai_score_delta_buy": 0,
-                    "ai_score_delta_sell": 0,
-                }
-            prediction = self.ai_model.predict(features)
-
-        adjustment = ai_prediction_to_adjustment(prediction, deterministic_direction)
-        return {
-            "ai_enabled": True,
-            "ai_direction": adjustment["ai_direction"],
-            "ai_confidence": adjustment["ai_confidence"],
-            "ai_reason": adjustment["reason"],
-            "ai_blocked": adjustment["block_signal"],
-            "ai_score_delta_buy": adjustment["score_delta_buy"],
-            "ai_score_delta_sell": adjustment["score_delta_sell"],
-        }
+        return self._gate.evaluate(data, deterministic_direction)
 
     def _build_explanation(
         self,
@@ -196,25 +124,9 @@ class MasterSignalEngine:
         tier: str,
         reasons: dict[str, list[str]],
     ) -> dict[str, Any]:
-        ai_enabled = bool(ai_fields.get("ai_enabled"))
-        action = derive_action(
-            ai_enabled=ai_enabled,
-            ai_blocked=bool(ai_fields.get("ai_blocked")),
-            ai_direction=ai_fields.get("ai_direction"),
-            deterministic_direction=deterministic_direction,
+        return self._gate.build_explanation(
+            ai_fields, deterministic_direction, tier, reasons,
         )
-        risk_label = derive_risk_label(
-            tier=tier,
-            penalties=reasons.get("penalties") or [],
-            ai_action=action,
-        )
-        return {
-            "ai_model_name": model_name(self.ai_feature_set, ai_enabled),
-            "ai_feature_set": self.ai_feature_set if ai_enabled else None,
-            "ai_action": action,
-            "ai_reason_short": short_reason(ai_fields.get("ai_reason")),
-            "ai_risk_label": risk_label,
-        }
 
     def _compute_levels(self, direction: str, h1_df, m15_df, d1_df) -> dict[str, Any]:
         entry = float(m15_df["Close"].iloc[-1])

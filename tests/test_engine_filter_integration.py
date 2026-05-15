@@ -64,7 +64,8 @@ def test_filter_block_marks_signal_as_blocked(tmp_path, history):
 
 
 def test_engine_without_filter_unchanged(history):
-    eng = MasterSignalEngine()
+    # Pin AI disabled so the assertion is not at the mercy of .env state.
+    eng = MasterSignalEngine(ai_enabled=False)
     sig = eng.analyze(history)
     assert "bull_score" in sig
     assert not sig.get("ai_blocked", False)

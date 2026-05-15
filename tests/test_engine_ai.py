@@ -63,7 +63,7 @@ def test_default_constructor_ai_disabled_does_not_instantiate_model(
         raise AssertionError("HFTradingModel should not be instantiated when AI is disabled")
 
     monkeypatch.setattr(
-        "xau_pro_bot.signals.engine.HFTradingModel",
+        "xau_pro_bot.signals.ai_gate.HFTradingModel",
         fail_if_instantiated,
     )
 
@@ -88,7 +88,7 @@ def test_env_disabled_false_does_not_instantiate_model(monkeypatch, all_tfs):
         raise AssertionError("HFTradingModel should not be instantiated when AI is disabled")
 
     monkeypatch.setattr(
-        "xau_pro_bot.signals.engine.HFTradingModel",
+        "xau_pro_bot.signals.ai_gate.HFTradingModel",
         fail_if_instantiated,
     )
 
