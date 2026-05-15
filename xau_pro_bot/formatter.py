@@ -162,6 +162,100 @@ def format_no_signal_killzone(killzone: str, price: float,
     )
 
 
+_STATUS_EMOJI = {
+    "ACTIVE": "🟡",
+    "TP1_HIT": "🎯",
+    "TP2_HIT": "🎯",
+    "TP3_HIT": "🏁",
+    "SL_HIT": "🛑",
+    "TIMEOUT": "⌛",
+    "CANCELLED": "✖️",
+}
+
+
+def _fmt_R(value: float | None) -> str:
+    if value is None:
+        return "—"
+    return f"{value:+.2f}R"
+
+
+def format_active_signals(rows: list[dict]) -> str:
+    if not rows:
+        return "📭 Активных сигналов нет."
+    parts = ["📒 Активные сигналы:"]
+    for r in rows:
+        emoji = _STATUS_EMOJI.get(r.get("status", "ACTIVE"), "•")
+        parts.append(
+            f"{emoji} #{r['id']} [{r.get('stream', 'intraday')}] "
+            f"{r['direction']} @ {_fmt_price(r['entry'])} → "
+            f"SL {_fmt_price(r['sl'])} / TP1 {_fmt_price(r.get('tp1'))} "
+            f"| {r.get('status', 'ACTIVE')} "
+            f"(MFE {r.get('max_favorable_R', 0.0):.2f}R / "
+            f"MAE {r.get('max_adverse_R', 0.0):.2f}R)"
+        )
+    return "\n".join(parts)
+
+
+def format_history(rows: list[dict]) -> str:
+    if not rows:
+        return "📭 История пуста."
+    parts = ["🗂 Последние закрытые сигналы:"]
+    for r in rows:
+        emoji = _STATUS_EMOJI.get(r.get("status", ""), "•")
+        parts.append(
+            f"{emoji} #{r['id']} [{r.get('stream', 'intraday')}] "
+            f"{r['direction']} @ {_fmt_price(r['entry'])} → "
+            f"{r.get('status', '—')} {_fmt_R(r.get('final_R'))}"
+        )
+    return "\n".join(parts)
+
+
+def format_lifecycle_transition(
+    *,
+    signal_id: int,
+    direction: str,
+    old_status: str,
+    new_status: str,
+    closed: bool,
+    final_R: float | None,
+    entry: float,
+    price: float,
+) -> str:
+    emoji = _STATUS_EMOJI.get(new_status, "🔔")
+    tail = f" → закрыт {_fmt_R(final_R)}" if closed else ""
+    return (
+        f"{emoji} #{signal_id} {direction} {old_status} → {new_status}{tail}\n"
+        f"Вход {_fmt_price(entry)} | Цена {_fmt_price(price)}"
+    )
+
+
+def format_stats(metrics_today: dict, metrics_week: dict,
+                 active_count: int, by_risk: dict[str, dict]) -> str:
+    def _block(title: str, m: dict) -> str:
+        pf = m.get("pf", 0.0)
+        pf_text = "∞" if pf == float("inf") else f"{pf:.2f}"
+        return (
+            f"{title}: {m['wins']}W / {m['losses']}L | "
+            f"WR {m['wr']*100:.0f}% | PF {pf_text} | "
+            f"Exp {m['expectancy']:+.2f}R"
+        )
+
+    parts = [
+        "📊 Lifecycle stats",
+        _block("Сегодня", metrics_today),
+        _block("7 дней", metrics_week),
+        f"Активных: {active_count}",
+    ]
+    if by_risk:
+        parts.append("По AI-риску:")
+        for lbl, data in sorted(by_risk.items()):
+            parts.append(
+                f" • {lbl}: {data['wins']}W / {data['losses']}L "
+                f"(avg {data['avg_R']:+.2f}R)"
+            )
+    return "\n".join(parts)
+
+
 def format_status(snapshot: dict) -> str:
     """Generic /status response builder."""
     lines = [

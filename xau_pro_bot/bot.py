@@ -21,6 +21,9 @@ from telegram.ext import (
 from xau_pro_bot import config, data, formatter
 from xau_pro_bot.indicators import classic
 from xau_pro_bot.indicators.ict import get_killzone
+from xau_pro_bot.lifecycle import (
+    Candle, TTL_BY_STREAM, evaluate_candle, lifecycle_signal_from_row,
+)
 from xau_pro_bot.signals.router import StreamRouter
 from xau_pro_bot.signals.filters import should_send
 from xau_pro_bot.state import State
@@ -65,9 +68,9 @@ def _log_signal(sig: dict[str, Any], status: str) -> None:
     _signal_log.info(line)
 
 
-def _persist(sig: dict[str, Any]) -> None:
+def _persist(sig: dict[str, Any]) -> int:
     assert STATE is not None
-    STATE.record_signal({
+    return STATE.record_signal({
         "ts_utc": sig["ts_utc"].isoformat(),
         "direction": sig["direction"],
         "tier": sig["tier"],
@@ -81,6 +84,9 @@ def _persist(sig: dict[str, Any]) -> None:
         "killzone": sig.get("killzone"),
         "reasons_json": json.dumps(sig["reasons"], ensure_ascii=False),
         "stream": sig.get("stream", "intraday"),
+        "ai_action": sig.get("ai_action"),
+        "ai_risk_label": sig.get("ai_risk_label"),
+        "ai_model_name": sig.get("ai_model_name"),
     })
 
 
@@ -148,7 +154,8 @@ async def _scan_and_send(app: Application, *, bypass_dedup: bool = False) -> Non
 async def cmd_start(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         "XAU Pro Bot готов.\n"
-        "Команды: /signal /status /levels /help /settings /stats")
+        "Команды: /signal /status /levels /help /settings "
+        "/stats /active /history")
 
 
 async def cmd_signal(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -231,11 +238,91 @@ async def cmd_levels(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def cmd_stats(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
     assert STATE is not None
-    today = STATE.count_today()
-    strong = STATE.count_today(tier="STRONG")
-    weak = STATE.count_today(tier="WEAK")
+    today = STATE.lifecycle_metrics(days=1)
+    week = STATE.lifecycle_metrics(days=7)
+    active = len(STATE.get_active())
+    by_risk = STATE.lifecycle_stats_by_risk()
     await update.message.reply_text(
-        f"Сегодня: {today} сигналов (STRONG={strong}, WEAK={weak})")
+        formatter.format_stats(today, week, active, by_risk))
+
+
+async def cmd_active(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
+    assert STATE is not None
+    rows = STATE.get_active()
+    await update.message.reply_text(formatter.format_active_signals(rows))
+
+
+async def cmd_history(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
+    assert STATE is not None
+    rows = STATE.recent_closed(limit=10)
+    await update.message.reply_text(formatter.format_history(rows))
+
+
+def _candle_from_m15(m15_df: pd.DataFrame) -> Candle:
+    last = m15_df.iloc[-1]
+    ts = m15_df.index[-1]
+    if hasattr(ts, "to_pydatetime"):
+        ts = ts.to_pydatetime()
+    return Candle(
+        high=float(last["High"]),
+        low=float(last["Low"]),
+        close=float(last["Close"]),
+        ts=ts,
+    )
+
+
+async def _monitor_active(app: Application) -> None:
+    assert STATE is not None
+    rows = STATE.get_active()
+    if not rows:
+        return
+    try:
+        tfs = data.fetch_all_timeframes(api_key=ENV["TWELVE_DATA_API_KEY"])
+    except Exception:
+        logging.exception("Monitor data fetch failed")
+        return
+    candle = _candle_from_m15(tfs["M15"])
+    now = datetime.now(tz=candle.ts.tzinfo) if candle.ts.tzinfo else datetime.utcnow()
+    for row in rows:
+        try:
+            sig = lifecycle_signal_from_row(row)
+            ttl = TTL_BY_STREAM.get(sig.stream, 24.0)
+            tr = evaluate_candle(sig, candle, now=now, ttl_hours=ttl)
+        except Exception:
+            logging.exception("Lifecycle eval failed for signal %s", row.get("id"))
+            continue
+        if tr is None:
+            continue
+        try:
+            STATE.update_lifecycle(
+                tr.signal_id,
+                status=tr.new_status,
+                closed=tr.closed,
+                final_R=tr.final_R,
+                max_favorable_R=tr.max_favorable_R,
+                max_adverse_R=tr.max_adverse_R,
+                closed_at=tr.closed_at,
+            )
+        except Exception:
+            logging.exception("Lifecycle update failed for signal %s", tr.signal_id)
+            continue
+        if tr.new_status != tr.old_status:
+            text = formatter.format_lifecycle_transition(
+                signal_id=tr.signal_id,
+                direction=sig.direction,
+                old_status=tr.old_status,
+                new_status=tr.new_status,
+                closed=tr.closed,
+                final_R=tr.final_R,
+                entry=sig.entry,
+                price=tr.price,
+            )
+            try:
+                await app.bot.send_message(
+                    chat_id=ENV["TELEGRAM_CHAT_ID"], text=text,
+                    parse_mode=ParseMode.MARKDOWN)
+            except Exception:
+                logging.exception("Lifecycle telegram send failed")
 
 
 async def _scheduled_scan(app: Application) -> None:
@@ -251,6 +338,10 @@ def _build_scheduler(app: Application) -> AsyncIOScheduler:
     sched.add_job(_scheduled_scan, "interval",
                   seconds=config.BACKGROUND_SCAN_INTERVAL,
                   args=[app], id="bg_scan",
+                  misfire_grace_time=60, coalesce=True)
+    sched.add_job(_monitor_active, "interval",
+                  seconds=config.KILLZONE_SCAN_INTERVAL,
+                  args=[app], id="lifecycle_monitor",
                   misfire_grace_time=60, coalesce=True)
     sched.add_job(lambda: STATE.prune_old(90) if STATE else None,
                   "cron", hour=0, minute=15, id="prune")
@@ -272,6 +363,8 @@ def main() -> None:
     app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("settings", cmd_settings))
     app.add_handler(CommandHandler("stats", cmd_stats))
+    app.add_handler(CommandHandler("active", cmd_active))
+    app.add_handler(CommandHandler("history", cmd_history))
 
     sched = _build_scheduler(app)
 
