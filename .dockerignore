@@ -1,0 +1,33 @@
+.git
+.gitignore
+.gitlab-ci.yml
+.github
+.venv
+venv
+__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+.DS_Store
+
+.env
+.env.*
+!.env.example
+
+# Logs and runtime state — never bake into the image.
+*.log
+state.db
+backtest_results.csv
+
+# Local datasets — not needed at runtime.
+data_*.csv
+
+# Heavy model artifacts other than Path C legacy.
+models_cache/*
+!models_cache/path_c_lgb.joblib
+
+# Tests, docs, scripts — not needed in the worker image.
+tests
+docs
+scripts
+.planning
