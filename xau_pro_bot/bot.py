@@ -155,7 +155,7 @@ async def cmd_start(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         "XAU Pro Bot готов.\n"
         "Команды: /signal /status /levels /help /settings "
-        "/stats /active /history")
+        "/stats /active /history /daily_report /weekly_report")
 
 
 async def cmd_signal(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -244,6 +244,38 @@ async def cmd_stats(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
     by_risk = STATE.lifecycle_stats_by_risk()
     await update.message.reply_text(
         formatter.format_stats(today, week, active, by_risk))
+
+
+async def cmd_daily_report(update: Update,
+                             _: ContextTypes.DEFAULT_TYPE) -> None:
+    assert STATE is not None
+    rep = STATE.paper_report(days=1)
+    await update.message.reply_text(formatter.format_paper_report(rep))
+
+
+async def cmd_weekly_report(update: Update,
+                              _: ContextTypes.DEFAULT_TYPE) -> None:
+    assert STATE is not None
+    rep = STATE.paper_report(days=7)
+    await update.message.reply_text(formatter.format_paper_report(rep))
+
+
+async def _scheduled_daily_report(app: Application) -> None:
+    assert STATE is not None
+    try:
+        rep = STATE.paper_report(days=1)
+        text = formatter.format_paper_report(rep)
+        await app.bot.send_message(
+            chat_id=ENV["TELEGRAM_CHAT_ID"], text=text,
+            parse_mode=ParseMode.MARKDOWN)
+    except Exception:
+        logging.exception("Scheduled daily report failed")
+
+
+def _daily_report_enabled() -> bool:
+    return os.getenv("DAILY_REPORT_ENABLED", "false").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
 
 
 async def cmd_active(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
@@ -345,6 +377,11 @@ def _build_scheduler(app: Application) -> AsyncIOScheduler:
                   misfire_grace_time=60, coalesce=True)
     sched.add_job(lambda: STATE.prune_old(90) if STATE else None,
                   "cron", hour=0, minute=15, id="prune")
+    if _daily_report_enabled():
+        sched.add_job(_scheduled_daily_report, "cron",
+                      hour=23, minute=55, args=[app], id="daily_report",
+                      misfire_grace_time=300, coalesce=True)
+        logging.info("Daily report scheduler enabled (23:55 UTC).")
     return sched
 
 
@@ -365,6 +402,8 @@ def main() -> None:
     app.add_handler(CommandHandler("stats", cmd_stats))
     app.add_handler(CommandHandler("active", cmd_active))
     app.add_handler(CommandHandler("history", cmd_history))
+    app.add_handler(CommandHandler("daily_report", cmd_daily_report))
+    app.add_handler(CommandHandler("weekly_report", cmd_weekly_report))
 
     sched = _build_scheduler(app)
 

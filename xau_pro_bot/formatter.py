@@ -256,6 +256,67 @@ def format_stats(metrics_today: dict, metrics_week: dict,
     return "\n".join(parts)
 
 
+_MIN_CLOSED_FOR_METRICS = 10
+
+
+def _pf_text(pf: float) -> str:
+    if pf == float("inf"):
+        return "∞"
+    return f"{pf:.2f}"
+
+
+def _format_bucket_lines(title: str,
+                          buckets: dict[str, dict]) -> list[str]:
+    if not buckets:
+        return []
+    lines = [title]
+    for key, b in sorted(buckets.items(),
+                          key=lambda kv: -kv[1].get("total", 0)):
+        decided = b.get("wins", 0) + b.get("losses", 0)
+        wr = (b["wins"] / decided) if decided else 0.0
+        lines.append(
+            f" • {key}: {b['total']} (W{b['wins']}/L{b['losses']}/"
+            f"T{b['timeouts']}) WR {wr*100:.0f}% "
+            f"ΣR {b.get('sum_R', 0.0):+.2f}"
+        )
+    return lines
+
+
+def format_paper_report(rep: dict) -> str:
+    period = rep.get("period_days", 1)
+    title = "📅 Daily report" if period == 1 else f"📅 {period}-day report"
+    parts = [
+        title,
+        f"Всего: {rep['total']} (актив {rep['active']}, закрыто {rep['closed']})",
+    ]
+    if rep["total"] == 0:
+        parts.append("Нет данных за период.")
+        return "\n".join(parts)
+
+    parts.append(
+        f"W {rep['wins']} / L {rep['losses']} / T {rep['timeouts']}"
+    )
+    if rep["closed"] >= _MIN_CLOSED_FOR_METRICS:
+        parts.append(
+            f"WR {rep['wr']*100:.0f}% | PF {_pf_text(rep['pf'])} | "
+            f"Exp {rep['expectancy']:+.2f}R | ΣR {rep['total_final_R']:+.2f}"
+        )
+    else:
+        parts.append(
+            f"ΣR {rep['total_final_R']:+.2f} "
+            f"(мало данных: {rep['closed']} закрытых, метрики "
+            f"WR/PF/Exp недостаточно надёжны)"
+        )
+    if rep.get("max_adverse_R") is not None:
+        parts.append(f"Max adverse: {rep['max_adverse_R']:.2f}R")
+
+    parts.extend(_format_bucket_lines("По стримам:", rep.get("by_stream", {})))
+    parts.extend(_format_bucket_lines("По AI-риску:", rep.get("by_risk", {})))
+    parts.extend(_format_bucket_lines("По AI-action:", rep.get("by_action", {})))
+    parts.extend(_format_bucket_lines("По tier:", rep.get("by_tier", {})))
+    return "\n".join(parts)
+
+
 def format_status(snapshot: dict) -> str:
     """Generic /status response builder."""
     lines = [

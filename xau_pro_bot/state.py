@@ -51,6 +51,112 @@ _LIFECYCLE_COLUMNS: tuple[tuple[str, str], ...] = (
 )
 
 
+def _empty_bucket() -> dict[str, Any]:
+    return {"total": 0, "wins": 0, "losses": 0, "timeouts": 0,
+            "active": 0, "sum_R": 0.0}
+
+
+def _bump(buckets: dict[str, dict[str, Any]], key: str | None,
+          *, active: bool, win: bool, loss: bool, timeout: bool,
+          final_R: float | None) -> None:
+    if not key:
+        return
+    b = buckets.setdefault(key, _empty_bucket())
+    b["total"] += 1
+    if active:
+        b["active"] += 1
+    if win:
+        b["wins"] += 1
+    if loss:
+        b["losses"] += 1
+    if timeout:
+        b["timeouts"] += 1
+    if final_R is not None:
+        b["sum_R"] += float(final_R)
+
+
+def _build_paper_report(rows: list[dict[str, Any]],
+                        days: int) -> dict[str, Any]:
+    total = len(rows)
+    active = closed = wins = losses = timeouts = 0
+    gross_win = gross_loss = 0.0
+    sum_R = 0.0
+    max_adverse: float | None = None
+    by_stream: dict[str, dict[str, Any]] = {}
+    by_risk: dict[str, dict[str, Any]] = {}
+    by_action: dict[str, dict[str, Any]] = {}
+    by_tier: dict[str, dict[str, Any]] = {}
+
+    for r in rows:
+        is_closed = r.get("closed_at") is not None
+        status = r.get("status") or "ACTIVE"
+        final_R = r.get("final_R")
+        is_timeout = status == "TIMEOUT"
+        is_win = is_closed and not is_timeout and (final_R or 0.0) > 0
+        is_loss = is_closed and not is_timeout and (final_R or 0.0) <= 0
+        is_active = not is_closed
+
+        if is_active:
+            active += 1
+        else:
+            closed += 1
+        if is_win:
+            wins += 1
+            gross_win += float(final_R)
+        if is_loss:
+            losses += 1
+            gross_loss += abs(float(final_R))
+        if is_timeout:
+            timeouts += 1
+        if is_closed and final_R is not None:
+            sum_R += float(final_R)
+
+        mae = r.get("max_adverse_R")
+        if mae is not None:
+            mae_f = float(mae)
+            if max_adverse is None or mae_f > max_adverse:
+                max_adverse = mae_f
+
+        for buckets, key in (
+            (by_stream, r.get("stream")),
+            (by_risk, r.get("ai_risk_label")),
+            (by_action, r.get("ai_action")),
+            (by_tier, r.get("tier")),
+        ):
+            _bump(buckets, key, active=is_active, win=is_win, loss=is_loss,
+                  timeout=is_timeout,
+                  final_R=final_R if is_closed else None)
+
+    decided = wins + losses
+    wr = (wins / decided) if decided else 0.0
+    if gross_loss > 0:
+        pf = gross_win / gross_loss
+    elif gross_win > 0:
+        pf = float("inf")
+    else:
+        pf = 0.0
+    expectancy = (sum_R / closed) if closed else 0.0
+
+    return {
+        "period_days": days,
+        "total": total,
+        "active": active,
+        "closed": closed,
+        "wins": wins,
+        "losses": losses,
+        "timeouts": timeouts,
+        "wr": wr,
+        "pf": pf,
+        "expectancy": expectancy,
+        "total_final_R": sum_R,
+        "max_adverse_R": max_adverse,
+        "by_stream": by_stream,
+        "by_risk": by_risk,
+        "by_action": by_action,
+        "by_tier": by_tier,
+    }
+
+
 class State:
     """Thin wrapper over SQLite for signal persistence and lifecycle queries."""
 
@@ -220,6 +326,18 @@ class State:
             }
             for r in rows
         }
+
+    def paper_report(self, days: int = 1) -> dict[str, Any]:
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+        rows = [
+            dict(r) for r in self._conn.execute(
+                "SELECT stream, tier, status, closed_at, final_R, "
+                "max_adverse_R, ai_action, ai_risk_label "
+                "FROM signals WHERE ts_utc >= ?",
+                (cutoff,),
+            ).fetchall()
+        ]
+        return _build_paper_report(rows, days)
 
     def lifecycle_metrics(self, days: int = 7) -> dict[str, Any]:
         cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
