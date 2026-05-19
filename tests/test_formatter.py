@@ -106,3 +106,39 @@ def test_strong_signal_omits_ai_line_when_disabled():
     sig = _sig()
     text = format_strong_signal(sig)
     assert "AI:" not in text
+
+
+def test_strong_signal_omits_tp3_when_missing():
+    sig = _sig()
+    sig["tp3"] = None
+    text = format_strong_signal(sig)
+    assert "TP3" not in text
+    # Should not render the spurious zero-pts placeholder.
+    assert "(0.0 pts) — D1" not in text
+
+
+def test_strong_signal_renders_swing_reasons():
+    sig = _sig()
+    sig["reasons"] = {
+        "swing": ["1000pip setup, range 2000 pips"],
+        "ict": [], "smc": [], "macro": [], "classic": [], "penalties": [],
+    }
+    text = format_strong_signal(sig)
+    assert "1000pip setup, range 2000 pips" in text
+
+
+def test_strong_signal_omits_analysis_block_when_all_reasons_empty():
+    sig = _sig()
+    sig["reasons"] = {
+        "swing": [], "ict": [], "smc": [], "macro": [],
+        "classic": [], "penalties": [],
+    }
+    text = format_strong_signal(sig)
+    assert "📐 Анализ:" not in text
+
+
+def test_strong_signal_handles_missing_reasons_dict():
+    sig = _sig()
+    sig.pop("reasons", None)
+    text = format_strong_signal(sig)
+    assert "📐 Анализ:" not in text

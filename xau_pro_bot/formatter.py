@@ -90,19 +90,27 @@ def _direction_header(sig: dict) -> str:
 
 def _analysis_block(sig: dict) -> str:
     lines = ["📐 Анализ:"]
-    for source in ("ict", "smc", "macro", "classic"):
-        for r in sig["reasons"].get(source, []):
+    reasons = sig.get("reasons") or {}
+    for source in ("swing", "ict", "smc", "macro", "classic"):
+        for r in reasons.get(source, []):
             lines.append(f"• {r} ✅")
-    for r in sig["reasons"].get("penalties", []):
+    for r in reasons.get("penalties", []):
         lines.append(f"• {r} ⚠️")
-    return "\n".join(lines)
+    return "\n".join(lines) if len(lines) > 1 else ""
+
+
+def _tp3_line(sig: dict) -> str | None:
+    tp3 = sig.get("tp3")
+    if tp3 is None:
+        return None
+    diff = tp3 - sig["entry"]
+    return f" •  TP3: `{_fmt_price(tp3)}` ({abs(diff):.1f} pts) — D1"
 
 
 def format_strong_signal(sig: dict) -> str:
     flag = KZ_FLAGS.get(sig.get("killzone") or "", "")
     sl_diff = sig["sl"] - sig["entry"]
     tp1_diff = (sig["tp1"] - sig["entry"]) if sig["tp1"] is not None else 0
-    tp3_diff = (sig["tp3"] - sig["entry"]) if sig["tp3"] is not None else 0
     ts: datetime = sig["ts_utc"]
 
     parts = [
@@ -113,20 +121,25 @@ def format_strong_signal(sig: dict) -> str:
         "🎯 Цели:",
         f" •  TP1: `{_fmt_price(sig['tp1'])}` ({abs(tp1_diff):.1f} pts) — FVG",
         _tp2_line(sig),
-        f" •  TP3: `{_fmt_price(sig['tp3'])}` ({abs(tp3_diff):.1f} pts) — D1",
-        "━━━━━━━━━━━━━━━━━━━",
+    ]
+    tp3_line = _tp3_line(sig)
+    if tp3_line:
+        parts.append(tp3_line)
+    parts.append("━━━━━━━━━━━━━━━━━━━")
+    parts.extend([
         f"📊 R:R → 1:{sig['rr']:.1f}",
         f"🧠 Score: {sig['score']}/100",
         f"⏱ Сессия: {sig.get('killzone') or '—'} {flag} | M15→H1",
-    ]
+    ])
     if sig.get("strategy_label"):
         parts.append(f"📐 Стратегия: {sig['strategy_label']}")
     if sig.get("horizon_label"):
         parts.append(f"⏳ Горизонт: {sig['horizon_label']}")
     parts.extend(_ai_section(sig))
+    analysis = _analysis_block(sig)
+    if analysis:
+        parts.extend(["━━━━━━━━━━━━━━━━━━━", analysis])
     parts.extend([
-        "━━━━━━━━━━━━━━━━━━━",
-        _analysis_block(sig),
         "━━━━━━━━━━━━━━━━━━━",
         f"🕐 {ts.strftime('%d.%m.%Y %H:%M')} UTC",
     ])

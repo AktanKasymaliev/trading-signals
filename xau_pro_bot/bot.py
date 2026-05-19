@@ -6,6 +6,7 @@ import json
 import logging
 import logging.handlers
 import os
+import subprocess
 import sys
 from datetime import datetime
 from typing import Any
@@ -56,6 +57,37 @@ _signal_log.setLevel(logging.INFO)
 ENV: dict[str, str] = {}
 STATE: State | None = None
 ROUTER = StreamRouter()
+# Module-level fingerprint cache of recently sent signals.
+# Shared across overlapping scan jobs to suppress duplicate sends emitted
+# in the gap between Telegram send and DB persist.
+_RECENT_SENT: dict[tuple, datetime] = {}
+
+
+def _git_commit_sha() -> str:
+    sha = os.getenv("RAILWAY_GIT_COMMIT_SHA") or os.getenv("GIT_COMMIT_SHA")
+    if sha:
+        return sha[:12]
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            check=True, capture_output=True, text=True, timeout=2,
+        )
+        return out.stdout.strip()[:12]
+    except Exception:
+        return "unknown"
+
+
+def _log_startup_banner() -> None:
+    ai_cfg = config.load_ai_config()
+    logging.info(
+        "Boot: commit=%s ai_enabled=%s ai_explain=%s feature_set=%s "
+        "model_id=%s model_filename=%s hybrid_mode=%s",
+        _git_commit_sha(),
+        ai_cfg["enabled"], ai_cfg["explain"], ai_cfg["feature_set"],
+        ai_cfg["model_id"] or "—",
+        ai_cfg["model_filename"] or "—",
+        ai_cfg["hybrid_mode"],
+    )
 
 
 def _log_signal(sig: dict[str, Any], status: str) -> None:
@@ -98,8 +130,26 @@ def _format(sig: dict[str, Any]) -> str:
     raise ValueError(f"Cannot format tier {sig['tier']}")
 
 
+def _scan_fingerprint(sig: dict[str, Any]) -> tuple:
+    return (
+        sig.get("stream", "intraday"),
+        sig.get("direction"),
+        round(float(sig.get("entry") or 0.0), 2),
+    )
+
+
+def _prune_recent_sent() -> None:
+    cutoff = datetime.utcnow().replace(tzinfo=None)
+    from datetime import timedelta as _td
+    horizon = cutoff - _td(hours=config.DEDUP_HOURS)
+    stale = [k for k, ts in _RECENT_SENT.items() if ts < horizon]
+    for k in stale:
+        _RECENT_SENT.pop(k, None)
+
+
 async def _scan_and_send(app: Application, *, bypass_dedup: bool = False) -> None:
     assert STATE is not None
+    _prune_recent_sent()
     try:
         tfs = data.fetch_all_timeframes(api_key=ENV["TWELVE_DATA_API_KEY"])
     except Exception:
@@ -134,7 +184,10 @@ async def _scan_and_send(app: Application, *, bypass_dedup: bool = False) -> Non
         return
 
     for sig in results:
-        ok, reason = should_send(sig, STATE, bypass_dedup=bypass_dedup)
+        ok, reason = should_send(
+            sig, STATE, bypass_dedup=bypass_dedup,
+            scan_fingerprints=set(_RECENT_SENT.keys()),
+        )
         if not ok:
             _log_signal(sig, f"skipped:{reason.value if reason else 'unknown'}")
             continue
@@ -145,6 +198,7 @@ async def _scan_and_send(app: Application, *, bypass_dedup: bool = False) -> Non
                 chat_id=ENV["TELEGRAM_CHAT_ID"], text=text,
                 parse_mode=ParseMode.MARKDOWN)
             _persist(sig)
+            _RECENT_SENT[_scan_fingerprint(sig)] = datetime.utcnow().replace(tzinfo=None)
             _log_signal(sig, "sent")
         except Exception:
             logging.exception("Telegram send failed")
@@ -420,6 +474,7 @@ def main() -> None:
     app.post_shutdown = on_shutdown
 
     logging.info("Starting XAU Pro Bot…")
+    _log_startup_banner()
     app.run_polling(allowed_updates=Update.ALL_TYPES, stop_signals=None)
 
 

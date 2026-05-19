@@ -74,6 +74,12 @@ MAX_SCALP_PER_DAY = 4
 SCALP_MIN_GAP_MINUTES = 30
 SWING_DIRECTION_COOLDOWN_HOURS = 24
 
+# Swing sanity guards (ATR units against H1 ATR).
+SWING_MAX_SL_ATR = float(os.getenv("SWING_MAX_SL_ATR", "60"))
+SWING_MAX_TP1_ATR = float(os.getenv("SWING_MAX_TP1_ATR", "80"))
+SWING_SEND_ENABLED = os.getenv(
+    "SWING_SEND_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
+
 # Stream identifiers
 STREAM_INTRADAY = "intraday"
 STREAM_SWING = "swing"

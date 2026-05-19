@@ -7,6 +7,7 @@ from typing import Any
 
 import pandas as pd
 
+from xau_pro_bot.indicators import classic
 from xau_pro_bot.indicators.swing import find_swing_setup
 from xau_pro_bot.indicators.ict import get_killzone
 
@@ -26,6 +27,16 @@ class SwingAnalyzer:
         setup = find_swing_setup(d1_df=data["D1"], h4_df=data["H4"])
         if setup is None:
             return None
+        atr_h1 = 1.0
+        try:
+            h1 = data.get("H1")
+            if h1 is not None and len(h1) >= 20:
+                enriched = classic.add_classic(h1)
+                val = enriched["ATR_14"].iloc[-1]
+                if val is not None and not pd.isna(val) and float(val) > 0:
+                    atr_h1 = float(val)
+        except Exception:
+            atr_h1 = 1.0
         sig: dict[str, Any] = {
             "direction": setup["direction"],
             "tier": _TIER[setup["type"]],
@@ -45,7 +56,7 @@ class SwingAnalyzer:
             "ts_utc": datetime.now(timezone.utc),
             "strategy_label": f"Swing {'1000' if setup['type'] == '1000pip' else '500'}",
             "horizon_label": _HORIZON[setup["type"]],
-            "atr_h1": 1.0,
+            "atr_h1": atr_h1,
         }
         if self._gate is not None:
             sig = self._gate.enrich(sig, data)
