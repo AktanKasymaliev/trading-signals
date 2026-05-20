@@ -28,8 +28,8 @@ from xau_pro_bot.lifecycle import (
 from xau_pro_bot.signals.router import StreamRouter
 from xau_pro_bot.signals.filters import should_send
 from xau_pro_bot.signals.diagnostics import (
-    diag_fields, no_signal_fingerprint, prune_no_signal_cache,
-    should_send_no_signal, summarize_bias,
+    diag_fields, minutes_since_last_no_signal, no_signal_fingerprint,
+    prune_no_signal_cache, should_send_no_signal, summarize_bias,
 )
 from xau_pro_bot.state import State
 
@@ -99,11 +99,13 @@ def _log_startup_banner() -> None:
     )
     logging.info(
         "Swing guards: SWING_SEND_ENABLED=%s SWING_MAX_SL_ATR=%s "
-        "SWING_MAX_TP1_ATR=%s NO_SIGNAL_DEDUP_MINUTES=%s",
+        "SWING_MAX_TP1_ATR=%s NO_SIGNAL_DEDUP_MINUTES=%s "
+        "SEND_NO_SIGNAL_UPDATES=%s",
         config.SWING_SEND_ENABLED,
         config.SWING_MAX_SL_ATR,
         config.SWING_MAX_TP1_ATR,
         config.NO_SIGNAL_DEDUP_MINUTES,
+        config.SEND_NO_SIGNAL_UPDATES,
     )
 
 
@@ -182,7 +184,101 @@ def _prune_recent_sent() -> None:
         _RECENT_SENT.pop(k, None)
 
 
-async def _scan_and_send(app: Application, *, bypass_dedup: bool = False) -> None:
+async def _handle_no_signal(
+    app: Application,
+    tfs: dict[str, pd.DataFrame],
+    *,
+    source: str,
+    force_no_signal: bool,
+) -> None:
+    """Handle the no-results branch with source-aware semantics."""
+    kz = get_killzone()
+    if not kz:
+        # Outside any killzone: no scheduled spam, manual gets compact reply.
+        if source == "manual":
+            try:
+                await app.bot.send_message(
+                    chat_id=ENV["TELEGRAM_CHAT_ID"],
+                    text=formatter.format_no_signal_unchanged(None),
+                )
+            except Exception:
+                logging.exception("Telegram manual no-signal reply failed")
+        return
+
+    # Scheduler honors SEND_NO_SIGNAL_UPDATES — silent suppression by default.
+    if source == "scheduled" and not config.SEND_NO_SIGNAL_UPDATES:
+        logging.info(
+            "Scheduled no-signal suppressed by SEND_NO_SIGNAL_UPDATES=false (%s)",
+            kz,
+        )
+        return
+
+    rsi = None
+    try:
+        enriched = classic.add_classic(tfs["H1"])
+        val = enriched["RSI_14"].iloc[-1]
+        rsi = float(val) if not pd.isna(val) else None
+    except Exception:
+        logging.exception("No-signal RSI calculation failed")
+    price = float(tfs["M15"]["Close"].iloc[-1])
+    from datetime import timezone as _tz
+    now_aware = datetime.now(_tz.utc)
+    prune_no_signal_cache(
+        _RECENT_NO_SIGNAL, now=now_aware,
+        window_minutes=config.NO_SIGNAL_DEDUP_MINUTES,
+    )
+    fp = no_signal_fingerprint(
+        stream="intraday", killzone=kz, price=price,
+        bucket_size=config.NO_SIGNAL_PRICE_BUCKET,
+    )
+    allow_full = force_no_signal or should_send_no_signal(
+        _RECENT_NO_SIGNAL, fp,
+        now=now_aware,
+        window_minutes=config.NO_SIGNAL_DEDUP_MINUTES,
+    )
+    if not allow_full:
+        if source == "manual":
+            mins = minutes_since_last_no_signal(
+                _RECENT_NO_SIGNAL, fp, now=now_aware,
+            )
+            try:
+                await app.bot.send_message(
+                    chat_id=ENV["TELEGRAM_CHAT_ID"],
+                    text=formatter.format_no_signal_unchanged(mins),
+                )
+            except Exception:
+                logging.exception("Telegram compact no-signal reply failed")
+        else:
+            logging.info("No-signal dedup: suppressing %s @ %.2f", kz, price)
+        return
+    msg = formatter.format_no_signal_killzone(
+        killzone=kz, price=price, rsi=rsi)
+    try:
+        await app.bot.send_message(
+            chat_id=ENV["TELEGRAM_CHAT_ID"], text=msg,
+            parse_mode=ParseMode.MARKDOWN)
+    except Exception:
+        logging.exception("Telegram no-signal send failed")
+
+
+async def _scan_and_send(
+    app: Application,
+    *,
+    bypass_dedup: bool = False,
+    source: str = "scheduled",
+    force_no_signal: bool = False,
+) -> None:
+    """Run a scan and dispatch results.
+
+    Args:
+        bypass_dedup: skip per-signal dedup (used by manual /signal commands).
+        source: "scheduled" or "manual". Scheduled scans honor
+            SEND_NO_SIGNAL_UPDATES and silently suppress no-signal pushes when
+            that flag is False. Manual scans always reply (compact when the
+            no-signal dedup window is active).
+        force_no_signal: bypass the NO_SIGNAL dedup window entirely. Reserved
+            for /signal_debug.
+    """
     assert STATE is not None
     _prune_recent_sent()
     try:
@@ -198,41 +294,9 @@ async def _scan_and_send(app: Application, *, bypass_dedup: bool = False) -> Non
         return
 
     if not results:
-        kz = get_killzone()
-        if kz:
-            rsi = None
-            try:
-                enriched = classic.add_classic(tfs["H1"])
-                val = enriched["RSI_14"].iloc[-1]
-                rsi = float(val) if not pd.isna(val) else None
-            except Exception:
-                logging.exception("No-signal RSI calculation failed")
-            price = float(tfs["M15"]["Close"].iloc[-1])
-            from datetime import timezone as _tz
-            now_aware = datetime.now(_tz.utc)
-            prune_no_signal_cache(
-                _RECENT_NO_SIGNAL, now=now_aware,
-                window_minutes=config.NO_SIGNAL_DEDUP_MINUTES,
-            )
-            fp = no_signal_fingerprint(
-                stream="intraday", killzone=kz, price=price,
-                bucket_size=config.NO_SIGNAL_PRICE_BUCKET,
-            )
-            if not should_send_no_signal(
-                _RECENT_NO_SIGNAL, fp,
-                now=now_aware,
-                window_minutes=config.NO_SIGNAL_DEDUP_MINUTES,
-            ):
-                logging.info("No-signal dedup: suppressing %s @ %.2f", kz, price)
-                return
-            msg = formatter.format_no_signal_killzone(
-                killzone=kz, price=price, rsi=rsi)
-            try:
-                await app.bot.send_message(
-                    chat_id=ENV["TELEGRAM_CHAT_ID"], text=msg,
-                    parse_mode=ParseMode.MARKDOWN)
-            except Exception:
-                logging.exception("Telegram no-signal send failed")
+        await _handle_no_signal(
+            app, tfs, source=source, force_no_signal=force_no_signal,
+        )
         return
 
     for sig in results:
@@ -260,13 +324,25 @@ async def _scan_and_send(app: Application, *, bypass_dedup: bool = False) -> Non
 async def cmd_start(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         "XAU Pro Bot готов.\n"
-        "Команды: /signal /status /levels /help /settings "
-        "/stats /active /history /daily_report /weekly_report")
+        "Команды: /signal /signal_debug /status /levels /help /settings "
+        "/stats /active /history /daily_report /weekly_report /debug_bias")
 
 
 async def cmd_signal(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text("Анализирую…")
-    await _scan_and_send(ctx.application, bypass_dedup=True)
+    await _scan_and_send(
+        ctx.application, bypass_dedup=True, source="manual",
+    )
+
+
+async def cmd_signal_debug(update: Update,
+                            ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Forced re-analysis: bypasses signal dedup AND no-signal dedup."""
+    await update.message.reply_text("Анализирую (debug, без дедупа)…")
+    await _scan_and_send(
+        ctx.application, bypass_dedup=True, source="manual",
+        force_no_signal=True,
+    )
 
 
 async def cmd_status(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
@@ -482,7 +558,7 @@ async def _monitor_active(app: Application) -> None:
 
 
 async def _scheduled_scan(app: Application) -> None:
-    await _scan_and_send(app, bypass_dedup=False)
+    await _scan_and_send(app, bypass_dedup=False, source="scheduled")
 
 
 def _build_scheduler(app: Application) -> AsyncIOScheduler:
@@ -519,6 +595,7 @@ def main() -> None:
     app = ApplicationBuilder().token(ENV["TELEGRAM_BOT_TOKEN"]).build()
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("signal", cmd_signal))
+    app.add_handler(CommandHandler("signal_debug", cmd_signal_debug))
     app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(CommandHandler("levels", cmd_levels))
     app.add_handler(CommandHandler("help", cmd_help))

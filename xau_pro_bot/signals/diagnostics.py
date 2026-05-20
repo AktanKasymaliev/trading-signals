@@ -43,6 +43,20 @@ def should_send_no_signal(
     return True
 
 
+def minutes_since_last_no_signal(
+    cache: dict[tuple, datetime],
+    fingerprint: tuple,
+    *,
+    now: datetime,
+) -> int | None:
+    """Return integer minutes since the last send of ``fingerprint``, or None."""
+    last = cache.get(fingerprint)
+    if last is None:
+        return None
+    delta = now - last
+    return max(0, int(delta.total_seconds() // 60))
+
+
 def prune_no_signal_cache(
     cache: dict[tuple, datetime],
     *,

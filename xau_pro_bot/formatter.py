@@ -183,6 +183,16 @@ def format_no_signal_killzone(killzone: str, price: float,
     )
 
 
+def format_no_signal_unchanged(minutes_ago: int | None) -> str:
+    """Compact reply when a duplicate NO_SIGNAL would have been sent."""
+    if minutes_ago is None:
+        return "Анализ без изменений: нет сигнала."
+    return (
+        "Анализ без изменений: нет сигнала. "
+        f"Последний update был {minutes_ago} мин назад."
+    )
+
+
 _STATUS_EMOJI = {
     "ACTIVE": "🟡",
     "TP1_HIT": "🎯",

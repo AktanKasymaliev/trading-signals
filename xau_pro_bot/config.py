@@ -84,6 +84,12 @@ SWING_SEND_ENABLED = os.getenv(
 NO_SIGNAL_DEDUP_MINUTES = int(os.getenv("NO_SIGNAL_DEDUP_MINUTES", "30"))
 NO_SIGNAL_PRICE_BUCKET = float(os.getenv("NO_SIGNAL_PRICE_BUCKET", "2.0"))
 
+# Production setting: when False, scheduler never pushes "Нет сигнала"
+# killzone updates — only real trade signals go through. /signal still
+# returns a reply (compact or full).
+SEND_NO_SIGNAL_UPDATES = os.getenv(
+    "SEND_NO_SIGNAL_UPDATES", "false").strip().lower() in {"1", "true", "yes", "on"}
+
 # Stream identifiers
 STREAM_INTRADAY = "intraday"
 STREAM_SWING = "swing"
