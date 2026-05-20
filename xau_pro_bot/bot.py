@@ -27,6 +27,10 @@ from xau_pro_bot.lifecycle import (
 )
 from xau_pro_bot.signals.router import StreamRouter
 from xau_pro_bot.signals.filters import should_send
+from xau_pro_bot.signals.diagnostics import (
+    diag_fields, no_signal_fingerprint, prune_no_signal_cache,
+    should_send_no_signal, summarize_bias,
+)
 from xau_pro_bot.state import State
 
 
@@ -61,6 +65,11 @@ ROUTER = StreamRouter()
 # Shared across overlapping scan jobs to suppress duplicate sends emitted
 # in the gap between Telegram send and DB persist.
 _RECENT_SENT: dict[tuple, datetime] = {}
+# Module-level fingerprint cache of recently sent NO_SIGNAL killzone updates.
+_RECENT_NO_SIGNAL: dict[tuple, datetime] = {}
+# Ring buffer of recent scan diagnostics for /debug_bias.
+_SCAN_DIAG: list[dict[str, Any]] = []
+_SCAN_DIAG_MAX = 50
 
 
 def _git_commit_sha() -> str:
@@ -88,16 +97,42 @@ def _log_startup_banner() -> None:
         ai_cfg["model_filename"] or "—",
         ai_cfg["hybrid_mode"],
     )
+    logging.info(
+        "Swing guards: SWING_SEND_ENABLED=%s SWING_MAX_SL_ATR=%s "
+        "SWING_MAX_TP1_ATR=%s NO_SIGNAL_DEDUP_MINUTES=%s",
+        config.SWING_SEND_ENABLED,
+        config.SWING_MAX_SL_ATR,
+        config.SWING_MAX_TP1_ATR,
+        config.NO_SIGNAL_DEDUP_MINUTES,
+    )
 
 
 def _log_signal(sig: dict[str, Any], status: str) -> None:
+    diag = diag_fields(sig)
+    extras = (
+        f"stream={diag['stream']} "
+        f"bull={diag['bull_score']} bear={diag['bear_score']} "
+        f"net_bull={diag['net_bull']} net_bear={diag['net_bear']} "
+        f"det_dir={diag['deterministic_direction']} "
+        f"ai_dir={diag['ai_direction']} ai_conf={diag['ai_confidence']} "
+        f"ai_action={diag['ai_action']} ai_blocked={diag['ai_blocked']} "
+        f"block_reason={diag['block_reason']} "
+        f"final_dir={diag['final_direction']}"
+    )
     line = " | ".join(str(x) for x in (
         sig["ts_utc"].isoformat() if isinstance(sig["ts_utc"], datetime) else sig["ts_utc"],
         sig["direction"], sig["tier"], sig["score"],
         sig.get("entry"), sig.get("sl"), sig.get("tp1"), sig.get("tp2"),
-        sig.get("rr"), sig.get("killzone"), status,
+        sig.get("rr"), sig.get("killzone"), status, extras,
     ))
     _signal_log.info(line)
+    _record_diag(sig)
+
+
+def _record_diag(sig: dict[str, Any]) -> None:
+    _SCAN_DIAG.append(diag_fields(sig))
+    if len(_SCAN_DIAG) > _SCAN_DIAG_MAX:
+        del _SCAN_DIAG[: len(_SCAN_DIAG) - _SCAN_DIAG_MAX]
 
 
 def _persist(sig: dict[str, Any]) -> int:
@@ -173,6 +208,23 @@ async def _scan_and_send(app: Application, *, bypass_dedup: bool = False) -> Non
             except Exception:
                 logging.exception("No-signal RSI calculation failed")
             price = float(tfs["M15"]["Close"].iloc[-1])
+            from datetime import timezone as _tz
+            now_aware = datetime.now(_tz.utc)
+            prune_no_signal_cache(
+                _RECENT_NO_SIGNAL, now=now_aware,
+                window_minutes=config.NO_SIGNAL_DEDUP_MINUTES,
+            )
+            fp = no_signal_fingerprint(
+                stream="intraday", killzone=kz, price=price,
+                bucket_size=config.NO_SIGNAL_PRICE_BUCKET,
+            )
+            if not should_send_no_signal(
+                _RECENT_NO_SIGNAL, fp,
+                now=now_aware,
+                window_minutes=config.NO_SIGNAL_DEDUP_MINUTES,
+            ):
+                logging.info("No-signal dedup: suppressing %s @ %.2f", kz, price)
+                return
             msg = formatter.format_no_signal_killzone(
                 killzone=kz, price=price, rsi=rsi)
             try:
@@ -338,6 +390,24 @@ async def cmd_active(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(formatter.format_active_signals(rows))
 
 
+async def cmd_debug_bias(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
+    diags = _SCAN_DIAG[-20:]
+    summary = summarize_bias(diags)
+    top = summary["top_sell_skip_reasons"]
+    top_lines = "\n".join(f"  • {r} ×{n}" for r, n in top) or "  —"
+    text = (
+        "🔬 Bias debug (last {n} scans)\n"
+        "BUY candidates: {buy}\n"
+        "SELL candidates: {sell}\n"
+        "NO_SIGNAL: {no_signal}\n"
+        "AI-blocked BUY: {ai_blocked_buy}\n"
+        "AI-blocked SELL: {ai_blocked_sell}\n"
+        "avg bull: {avg_bull} / avg bear: {avg_bear}\n"
+        "Top SELL skip reasons:\n{top}"
+    ).format(top=top_lines, **summary)
+    await update.message.reply_text(text)
+
+
 async def cmd_history(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
     assert STATE is not None
     rows = STATE.recent_closed(limit=10)
@@ -458,6 +528,7 @@ def main() -> None:
     app.add_handler(CommandHandler("history", cmd_history))
     app.add_handler(CommandHandler("daily_report", cmd_daily_report))
     app.add_handler(CommandHandler("weekly_report", cmd_weekly_report))
+    app.add_handler(CommandHandler("debug_bias", cmd_debug_bias))
 
     sched = _build_scheduler(app)
 

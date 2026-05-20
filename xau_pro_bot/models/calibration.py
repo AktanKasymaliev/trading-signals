@@ -7,7 +7,8 @@ from typing import Any
 from xau_pro_bot import config
 
 
-def _empty(ai_direction: str, ai_confidence: float, reason: str) -> dict[str, Any]:
+def _empty(ai_direction: str, ai_confidence: float, reason: str,
+           ai_low_confidence: bool = False) -> dict[str, Any]:
     return {
         "score_delta_buy": 0,
         "score_delta_sell": 0,
@@ -15,6 +16,7 @@ def _empty(ai_direction: str, ai_confidence: float, reason: str) -> dict[str, An
         "reason": reason,
         "ai_direction": ai_direction,
         "ai_confidence": ai_confidence,
+        "ai_low_confidence": ai_low_confidence,
     }
 
 
@@ -33,7 +35,11 @@ def ai_prediction_to_adjustment(
         return out
 
     if confidence < ai_config["min_confidence"]:
-        return _empty(direction, confidence, "AI confidence below minimum threshold")
+        return _empty(
+            direction, confidence,
+            "AI confidence below minimum; deterministic signal unchanged",
+            ai_low_confidence=True,
+        )
 
     if deterministic_direction is None:
         return _empty(direction, confidence, "AI ignored without deterministic direction")

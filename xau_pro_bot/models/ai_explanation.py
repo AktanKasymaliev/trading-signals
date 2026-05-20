@@ -31,14 +31,19 @@ def derive_action(
     ai_blocked: bool,
     ai_direction: str | None,
     deterministic_direction: str,
+    ai_low_confidence: bool = False,
 ) -> str | None:
-    """KEEP / BLOCK / DOWNGRADE / None.
+    """KEEP / BLOCK / DOWNGRADE / NEUTRAL / None.
 
     - None: AI disabled or skipped (no decision to display).
     - BLOCK: gate refused the trade.
     - DOWNGRADE: AI took an opinion that conflicts with deterministic direction
       but did not hard-block (penalty applied).
-    - KEEP: AI agrees or stayed neutral while letting the signal through.
+    - NEUTRAL: AI evaluated but confidence below minimum threshold — it did
+      NOT actually confirm the deterministic signal. Distinct from KEEP so
+      the user is not misled into thinking AI endorsed the trade.
+    - KEEP: AI agrees with sufficient confidence while letting the signal
+      through.
     """
     if not ai_enabled:
         return None
@@ -46,6 +51,8 @@ def derive_action(
         return None  # AI was enabled but skipped (e.g. incomplete features).
     if ai_blocked:
         return "BLOCK"
+    if ai_low_confidence:
+        return "NEUTRAL"
     if ai_direction in ("BUY", "SELL") and ai_direction != deterministic_direction:
         return "DOWNGRADE"
     return "KEEP"

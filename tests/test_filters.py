@@ -191,6 +191,23 @@ def test_swing_send_disabled(state, monkeypatch):
     assert not ok and reason == SkipReason.SWING_DISABLED
 
 
+def test_swing_specific_paper_run_case_rejected(state, monkeypatch):
+    """Regression: reproduce the live paper-run swing BUY that slipped through.
+
+    entry=4253.85, sl=3913.00, tp1=5597.23 with realistic H1 ATR (~10 USD)
+    must be rejected as SWING_TARGET_TOO_FAR under default env defaults.
+    """
+    from xau_pro_bot import config as _cfg
+    monkeypatch.setattr(_cfg, "SWING_SEND_ENABLED", True)
+    monkeypatch.setattr(_cfg, "SWING_MAX_SL_ATR", 60.0)
+    monkeypatch.setattr(_cfg, "SWING_MAX_TP1_ATR", 80.0)
+    sig = _swing_sig(entry=4253.85, sl=3913.00, tp1=5597.23, atr_h1=10.0)
+    ok, reason = should_send(sig, state)
+    assert not ok
+    # SL distance is 340/10 = 34 ATR (under 60), so the TP1 guard fires first.
+    assert reason == SkipReason.SWING_TARGET_TOO_FAR
+
+
 def test_swing_within_atr_bounds_allowed(state, monkeypatch):
     from xau_pro_bot import config as _cfg
     monkeypatch.setattr(_cfg, "SWING_SEND_ENABLED", True)

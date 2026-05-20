@@ -84,6 +84,7 @@ class AIExplanationGate:
             "ai_confidence": None,
             "ai_reason": None,
             "ai_blocked": False,
+            "ai_low_confidence": False,
             "ai_score_delta_buy": 0,
             "ai_score_delta_sell": 0,
         }
@@ -116,6 +117,7 @@ class AIExplanationGate:
                     "ai_confidence": None,
                     "ai_reason": "AI skipped: incomplete input features",
                     "ai_blocked": False,
+                    "ai_low_confidence": False,
                     "ai_score_delta_buy": 0,
                     "ai_score_delta_sell": 0,
                 }
@@ -128,6 +130,7 @@ class AIExplanationGate:
             "ai_confidence": adjustment["ai_confidence"],
             "ai_reason": adjustment["reason"],
             "ai_blocked": adjustment["block_signal"],
+            "ai_low_confidence": bool(adjustment.get("ai_low_confidence", False)),
             "ai_score_delta_buy": adjustment["score_delta_buy"],
             "ai_score_delta_sell": adjustment["score_delta_sell"],
         }
@@ -145,6 +148,7 @@ class AIExplanationGate:
             ai_blocked=bool(ai_fields.get("ai_blocked")),
             ai_direction=ai_fields.get("ai_direction"),
             deterministic_direction=deterministic_direction,
+            ai_low_confidence=bool(ai_fields.get("ai_low_confidence", False)),
         )
         risk_label = derive_risk_label(
             tier=tier,

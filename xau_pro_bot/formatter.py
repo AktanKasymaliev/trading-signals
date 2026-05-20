@@ -38,6 +38,13 @@ _RISK_LABEL_RU = {
     "CLEAN_SETUP": "CLEAN",
 }
 
+_AI_ACTION_LABEL = {
+    "KEEP": "KEEP",
+    "BLOCK": "BLOCK",
+    "DOWNGRADE": "DOWNGRADE",
+    "NEUTRAL": "NEUTRAL",
+}
+
 
 def _ai_explain_enabled() -> bool:
     # Read live so tests/monkeypatch can flip the flag at runtime.
@@ -51,7 +58,8 @@ def _ai_block(sig: dict) -> list[str]:
     """Multi-line analysis-assistant AI block (AI_EXPLAIN=true)."""
     if not sig.get("ai_enabled"):
         return []
-    action = sig.get("ai_action") or "—"
+    raw_action = sig.get("ai_action") or "—"
+    action = _AI_ACTION_LABEL.get(raw_action, raw_action)
     model = sig.get("ai_model_name") or "AI"
     risk = _RISK_LABEL_RU.get(sig.get("ai_risk_label") or "", "—")
     reason = sig.get("ai_reason_short") or sig.get("ai_reason") or "—"

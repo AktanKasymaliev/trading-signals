@@ -80,6 +80,10 @@ SWING_MAX_TP1_ATR = float(os.getenv("SWING_MAX_TP1_ATR", "80"))
 SWING_SEND_ENABLED = os.getenv(
     "SWING_SEND_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
 
+# No-signal Telegram update dedup window (minutes).
+NO_SIGNAL_DEDUP_MINUTES = int(os.getenv("NO_SIGNAL_DEDUP_MINUTES", "30"))
+NO_SIGNAL_PRICE_BUCKET = float(os.getenv("NO_SIGNAL_PRICE_BUCKET", "2.0"))
+
 # Stream identifiers
 STREAM_INTRADAY = "intraday"
 STREAM_SWING = "swing"
